@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
@@ -11,6 +12,25 @@ CORS(app)
 
 BRAND_PATTERNS = ("nike", "paypal", "benetton", "amazon")
 PROTECTED_BRANDS = ("bankisrael", "paypal", "amazon", "nike", "benetton")
+TRUSTED_TARGET_LABELS = (
+    "bankisrael",
+    "bankhapoalim",
+    "leumi",
+    "discount",
+    "mizrahi",
+    "mercantile",
+    "paypal",
+    "amazon",
+    "apple",
+    "google",
+    "microsoft",
+    "facebook",
+    "instagram",
+    "whatsapp",
+    "bit",
+    "visa",
+    "mastercard",
+)
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
 SUSPICIOUS_TLDS = (".xyz", ".top", ".click", ".site", ".store")
 SUSPICIOUS_MESSAGE_TERMS = (
@@ -31,7 +51,7 @@ I18N = {
         "invalid_url": "The link format looks invalid.",
         "brand": "Looks like a known brand imitation.",
         "suspicious_words": "Contains words commonly used in phishing.",
-        "lookalike_brand": "Link looks like a fake brand/domain imitation.",
+        "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
         "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
         "unicode_lookalike": "Link uses lookalike Unicode characters.",
         "punycode": "Link uses encoded international domain format (IDN).",
@@ -45,13 +65,19 @@ I18N = {
         "intel_configured": "Security data sources are connected: {sources}.",
         "intel_missing": "Advanced security sources are not connected yet.",
         "need_input": "Please enter a URL or full message text.",
-        "no_major_signals": "No strong phishing signs were found."
+        "no_major_signals": "No strong phishing signs were found.",
+        "safe_now": "No warning signs were found in this check.",
+        "explain_lookalike": "Main warning: the domain looks like an imitation of a trusted name (for example, a one-letter change)."
+        ,"explain_lookalike_target": "Main warning: the domain '{seen}' is very similar to trusted name '{target}' (possible impersonation)."
+        ,"explain_not_high": "There are warning signs, but not enough for high risk. Treat this link carefully."
+        ,"explain_medium": "Several warning signs were found. Avoid clicking unless verified from an official source."
+        ,"explain_high": "Strong phishing indicators were found. Do not open this link."
     },
     "he": {
         "invalid_url": "פורמט הקישור נראה לא תקין.",
         "brand": "נראה כמו התחזות למותג מוכר.",
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
-        "lookalike_brand": "נראה שהקישור מחקה דומיין/מותג אמיתי.",
+        "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
         "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
         "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
         "punycode": "הקישור משתמש בפורמט דומיין מקודד (IDN).",
@@ -65,7 +91,13 @@ I18N = {
         "intel_configured": "מקורות מידע אבטחתי מחוברים: {sources}.",
         "intel_missing": "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
-        "no_major_signals": "לא נמצאו סימני פישינג חזקים."
+        "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
+        "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
+        "explain_lookalike": "האזהרה המרכזית: הדומיין נראה כהתחזות לשם אמין (למשל שינוי של אות אחת)."
+        ,"explain_lookalike_target": "האזהרה המרכזית: הדומיין '{seen}' דומה מאוד לשם האמין '{target}' (חשד להתחזות)."
+        ,"explain_not_high": "זוהו סימני אזהרה, אבל לא ברמה גבוהה. מומלץ להתייחס לקישור בזהירות."
+        ,"explain_medium": "זוהו כמה סימני אזהרה משמעותיים. לא ללחוץ לפני אימות מול מקור רשמי."
+        ,"explain_high": "זוהו סימנים חזקים לפישינג. לא לפתוח את הקישור."
     }
 }
 
@@ -166,6 +198,33 @@ def is_one_edit_away(a: str, b: str) -> bool:
     return edits == 1
 
 
+def similarity_ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def find_lookalike_target(label_normalized: str) -> str:
+    """
+    Identify suspiciously similar trusted labels.
+    This is principle-based fuzzy matching, not exact example matching.
+    """
+    best_target = ""
+    best_ratio = 0.0
+    for trusted in TRUSTED_TARGET_LABELS:
+        if label_normalized == trusted:
+            continue
+        if abs(len(label_normalized) - len(trusted)) > 2:
+            continue
+        ratio = similarity_ratio(label_normalized, trusted)
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_target = trusted
+
+    # Strong fuzzy similarity threshold for lookalike domains.
+    if best_target and best_ratio >= 0.84:
+        return best_target
+    return ""
+
+
 def get_primary_label(hostname: str) -> str:
     """Get main domain label (handles normal and .co.il style domains)."""
     host = hostname.lower()
@@ -194,14 +253,15 @@ def extract_first_url(text: str) -> str:
     return candidate
 
 
-def analyze_url(url: str) -> tuple[int, list[str]]:
+def analyze_url(url: str) -> tuple[int, list[str], dict]:
     """Analyze URL heuristics and return partial score + reasons."""
     score = 0
     reasons = []
     normalized_url = (url or "").strip()
 
+    context = {}
     if not normalized_url:
-        return 0, reasons
+        return 0, reasons, context
 
     lower_url = normalized_url.lower()
 
@@ -222,7 +282,7 @@ def analyze_url(url: str) -> tuple[int, list[str]]:
     # Basic format validation: require a hostname like example.com.
     if not hostname or "." not in hostname:
         reasons.append("invalid_url")
-        return score, reasons
+        return score, reasons, context
 
     # Rule: some top-level domains are frequently abused.
     if any(hostname.endswith(tld) for tld in SUSPICIOUS_TLDS):
@@ -251,16 +311,26 @@ def analyze_url(url: str) -> tuple[int, list[str]]:
     label = get_primary_label(hostname).replace("-", "")
     label_normalized = normalize_lookalike_text(label)
     is_lookalike = False
+    lookalike_target = ""
     for brand in PROTECTED_BRANDS:
         if label == brand:
             continue
         if label_normalized == brand or is_one_edit_away(label_normalized, brand):
             is_lookalike = True
+            lookalike_target = brand
             break
 
+    if not is_lookalike:
+        fuzzy_target = find_lookalike_target(label_normalized)
+        if fuzzy_target:
+            is_lookalike = True
+            lookalike_target = fuzzy_target
+
     if is_lookalike:
-        score += 50
+        score += 70
         reasons.append("lookalike_brand")
+        context["lookalike_seen"] = label
+        context["lookalike_target"] = lookalike_target
 
     # Rule: very long URLs often hide malicious intent.
     if len(normalized_url) > 75:
@@ -278,7 +348,7 @@ def analyze_url(url: str) -> tuple[int, list[str]]:
         score += 25
         reasons.append("no_https")
 
-    return score, reasons
+    return score, reasons, context
 
 
 def analyze_message_text(message: str) -> tuple[int, list[str]]:
@@ -334,11 +404,25 @@ def external_intel_status(url: str) -> tuple[str, list[str]]:
 
 
 def classify_risk(score: int) -> str:
-    if score <= 30:
-        return "Low"
     if score <= 60:
         return "Medium"
     return "High"
+
+
+def build_explanation(language: str, risk_level: str, reason_keys: list[str], context: dict) -> str:
+    if not reason_keys:
+        return t(language, "safe_now")
+    if "lookalike_brand" in reason_keys:
+        target = context.get("lookalike_target", "")
+        seen = context.get("lookalike_seen", "")
+        if target and seen:
+            return t(language, "explain_lookalike_target", target=target, seen=seen)
+        return t(language, "explain_lookalike")
+    if risk_level == "High":
+        return t(language, "explain_high")
+    if risk_level == "Medium":
+        return t(language, "explain_medium")
+    return t(language, "explain_not_high")
 
 
 @app.post("/analyze")
@@ -361,26 +445,31 @@ def analyze():
             }
         ), 400
 
-    url_score, url_reason_keys = analyze_url(url_to_check)
+    url_score, url_reason_keys, url_context = analyze_url(url_to_check)
     text_score, text_reason_keys = analyze_message_text(message)
     intel_key, intel_sources = external_intel_status(url_to_check)
 
     total_score = min(100, url_score + text_score)
     reason_keys = url_reason_keys + text_reason_keys
     reasons = [t(language, key) for key in reason_keys]
+    intel_note = ""
     if intel_key == "intel_configured":
-        reasons.append(t(language, intel_key, sources=", ".join(intel_sources)))
+        intel_note = t(language, intel_key, sources=", ".join(intel_sources))
     elif intel_key:
-        reasons.append(t(language, intel_key))
+        intel_note = t(language, intel_key)
 
     if not reasons:
-        reasons = [t(language, "no_major_signals")]
+        reasons = [t(language, "safe_now")]
 
+    risk_level = classify_risk(total_score)
     return jsonify(
         {
             "score": total_score,
-            "risk_level": classify_risk(total_score),
+            "risk_level": risk_level,
+            "reason_keys": reason_keys,
             "reasons": reasons,
+            "explanation": build_explanation(language, risk_level, reason_keys, url_context),
+            "intel_note": intel_note,
             "analyzed_url": url_to_check
         }
     )

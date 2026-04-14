@@ -101,11 +101,6 @@ button:disabled {
   padding-top: 12px;
 }
 
-.risk-low {
-  color: #15803d;
-  font-weight: 700;
-}
-
 .risk-medium {
   color: #ca8a04;
   font-weight: 700;
