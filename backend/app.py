@@ -1,11 +1,20 @@
 import os
 import re
 import unicodedata
+import base64
+import ssl
+import socket
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
+import requests
+import whois
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
@@ -52,6 +61,7 @@ I18N = {
         "brand": "Looks like a known brand imitation.",
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
+        "case_confusable": "Domain uses mixed uppercase/lowercase letters to mimic another character.",
         "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
         "unicode_lookalike": "Link uses lookalike Unicode characters.",
         "punycode": "Link uses encoded international domain format (IDN).",
@@ -64,9 +74,15 @@ I18N = {
         "message_aggressive": "Aggressive punctuation detected.",
         "intel_configured": "Security data sources are connected: {sources}.",
         "intel_missing": "Advanced security sources are not connected yet.",
+        "vt_malicious": "VirusTotal reports this link as malicious.",
+        "vt_suspicious": "VirusTotal reports suspicious detections for this link.",
+        "vt_clean": "VirusTotal did not report malicious detections for this link.",
+        "vt_pending": "VirusTotal scan started; results are still pending.",
+        "vt_unavailable": "VirusTotal could not be reached right now.",
         "need_input": "Please enter a URL or full message text.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
+        "insufficient_trust_signals": "Not enough trust signals for a green/safe result.",
         "explain_lookalike": "Main warning: the domain looks like an imitation of a trusted name (for example, a one-letter change)."
         ,"explain_lookalike_target": "Main warning: the domain '{seen}' is very similar to trusted name '{target}' (possible impersonation)."
         ,"explain_not_high": "There are warning signs, but not enough for high risk. Treat this link carefully."
@@ -78,6 +94,7 @@ I18N = {
         "brand": "נראה כמו התחזות למותג מוכר.",
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
+        "case_confusable": "הדומיין משתמש בערבוב אותיות גדולות/קטנות כדי להטעות חזותית.",
         "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
         "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
         "punycode": "הקישור משתמש בפורמט דומיין מקודד (IDN).",
@@ -90,9 +107,15 @@ I18N = {
         "message_aggressive": "נמצאו סימני פיסוק אגרסיביים.",
         "intel_configured": "מקורות מידע אבטחתי מחוברים: {sources}.",
         "intel_missing": "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים.",
+        "vt_malicious": "VirusTotal מדווח שהקישור זדוני.",
+        "vt_suspicious": "VirusTotal מדווח על אינדיקציות חשודות לקישור.",
+        "vt_clean": "VirusTotal לא מצא אינדיקציות זדוניות בקישור.",
+        "vt_pending": "נסרקה בקשה ל-VirusTotal, התוצאה עדיין מתעדכנת.",
+        "vt_unavailable": "לא ניתן היה להגיע ל-VirusTotal כרגע.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
+        "insufficient_trust_signals": "אין מספיק אותות אמון כדי לתת מצב ירוק/בטוח.",
         "explain_lookalike": "האזהרה המרכזית: הדומיין נראה כהתחזות לשם אמין (למשל שינוי של אות אחת)."
         ,"explain_lookalike_target": "האזהרה המרכזית: הדומיין '{seen}' דומה מאוד לשם האמין '{target}' (חשד להתחזות)."
         ,"explain_not_high": "זוהו סימני אזהרה, אבל לא ברמה גבוהה. מומלץ להתייחס לקישור בזהירות."
@@ -240,6 +263,19 @@ def get_primary_label(hostname: str) -> str:
     return parts[-2]
 
 
+def extract_host_preserve_case(parsed_url) -> str:
+    """
+    Extract hostname while preserving original casing from netloc.
+    urlparse().hostname lowercases the value, so we derive from netloc for case checks.
+    """
+    netloc = parsed_url.netloc or ""
+    if "@" in netloc:
+        netloc = netloc.split("@", 1)[1]
+    if ":" in netloc:
+        netloc = netloc.split(":", 1)[0]
+    return netloc.strip("[]")
+
+
 def extract_first_url(text: str) -> str:
     """Extract first URL from text if present."""
     if not text:
@@ -278,6 +314,7 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     # Parse URL parts; add temporary https scheme if missing for robust parsing.
     parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
     hostname = (parsed.hostname or "").lower()
+    host_case_raw = extract_host_preserve_case(parsed)
 
     # Basic format validation: require a hostname like example.com.
     if not hostname or "." not in hostname:
@@ -331,6 +368,13 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         reasons.append("lookalike_brand")
         context["lookalike_seen"] = label
         context["lookalike_target"] = lookalike_target
+
+    # Rule: suspicious case-mixing (e.g. iI) is a strong phishing indicator.
+    has_upper = any(ch.isalpha() and ch.isupper() for ch in host_case_raw)
+    has_lower = any(ch.isalpha() and ch.islower() for ch in host_case_raw)
+    if has_upper and has_lower:
+        score += 70
+        reasons.append("case_confusable")
 
     # Rule: very long URLs often hide malicious intent.
     if len(normalized_url) > 75:
@@ -403,7 +447,96 @@ def external_intel_status(url: str) -> tuple[str, list[str]]:
     return "intel_missing", []
 
 
+def _vt_url_id(url: str) -> str:
+    encoded = base64.urlsafe_b64encode(url.encode("utf-8")).decode("utf-8")
+    return encoded.strip("=")
+
+
+def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
+    """
+    Returns: (score_delta, reason_keys, intel_note_key)
+    """
+    headers = {"x-apikey": api_key}
+    reason_keys: list[str] = []
+    intel_note_key = "intel_configured"
+
+    try:
+        url_id = _vt_url_id(url)
+        report_resp = requests.get(
+            f"https://www.virustotal.com/api/v3/urls/{url_id}",
+            headers=headers,
+            timeout=8
+        )
+
+        if report_resp.status_code == 404:
+            submit_resp = requests.post(
+                "https://www.virustotal.com/api/v3/urls",
+                headers=headers,
+                data={"url": url},
+                timeout=8
+            )
+            if submit_resp.ok:
+                return 0, ["vt_pending"], intel_note_key
+            return 0, [], "vt_unavailable"
+
+        if not report_resp.ok:
+            return 0, [], "vt_unavailable"
+
+        stats = (
+            report_resp.json()
+            .get("data", {})
+            .get("attributes", {})
+            .get("last_analysis_stats", {})
+        )
+        malicious = int(stats.get("malicious", 0))
+        suspicious = int(stats.get("suspicious", 0))
+
+        if malicious > 0:
+            return min(60, 35 + malicious), ["vt_malicious"], intel_note_key
+        if suspicious > 0:
+            return min(40, 20 + suspicious * 2), ["vt_suspicious"], intel_note_key
+        return 0, ["vt_clean"], intel_note_key
+    except Exception:
+        return 0, [], "vt_unavailable"
+
+
+def dns_resolves(hostname: str) -> bool:
+    try:
+        socket.getaddrinfo(hostname, None)
+        return True
+    except Exception:
+        return False
+
+
+def tls_certificate_valid(hostname: str) -> bool:
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, 443), timeout=4) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname):
+                return True
+    except Exception:
+        return False
+
+
+def domain_age_days(hostname: str) -> int | None:
+    try:
+        data = whois.whois(hostname)
+        created = data.creation_date
+        if isinstance(created, list):
+            created = created[0] if created else None
+        if not created:
+            return None
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return max(0, (now - created).days)
+    except Exception:
+        return None
+
+
 def classify_risk(score: int) -> str:
+    if score <= 20:
+        return "Low"
     if score <= 60:
         return "Medium"
     return "High"
@@ -448,9 +581,50 @@ def analyze():
     url_score, url_reason_keys, url_context = analyze_url(url_to_check)
     text_score, text_reason_keys = analyze_message_text(message)
     intel_key, intel_sources = external_intel_status(url_to_check)
+    intel_score = 0
+    intel_reason_keys: list[str] = []
 
-    total_score = min(100, url_score + text_score)
-    reason_keys = url_reason_keys + text_reason_keys
+    if url_to_check and os.getenv("VIRUSTOTAL_API_KEY"):
+        vt_score, vt_reason_keys, vt_note_key = query_virustotal(
+            url_to_check, os.getenv("VIRUSTOTAL_API_KEY", "")
+        )
+        intel_score += vt_score
+        intel_reason_keys.extend(vt_reason_keys)
+        intel_key = vt_note_key
+
+    total_score = min(100, url_score + text_score + intel_score)
+    reason_keys = url_reason_keys + text_reason_keys + intel_reason_keys
+
+    parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
+    hostname = (parsed.hostname or "").lower()
+    dns_ok = dns_resolves(hostname) if hostname else False
+    tls_ok = tls_certificate_valid(hostname) if hostname else False
+    age_days = domain_age_days(hostname) if hostname else None
+    vt_clean = "vt_clean" in intel_reason_keys
+    no_local_warnings = len(url_reason_keys + text_reason_keys) == 0
+    domain_old_enough = age_days is not None and age_days >= 180
+
+    age_status = "na"
+    if age_days is not None:
+        age_status = "pass" if age_days >= 180 else "fail"
+
+    green_checks = [
+        {"key": "no_local_warnings", "status": "pass" if no_local_warnings else "fail"},
+        {"key": "vt_clean", "status": "pass" if vt_clean else "fail"},
+        {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
+        {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
+        {"key": "domain_age_180d", "status": age_status, "value": age_days},
+    ]
+
+    # Core trust requirements must pass; domain age is supportive and can be unavailable.
+    core_pass = no_local_warnings and vt_clean and dns_ok and tls_ok
+    age_not_risky = age_days is None or age_days >= 30
+    is_green_safe = core_pass and age_not_risky
+
+    if not is_green_safe and total_score == 0:
+        total_score = 25
+        reason_keys.append("insufficient_trust_signals")
+
     reasons = [t(language, key) for key in reason_keys]
     intel_note = ""
     if intel_key == "intel_configured":
@@ -462,10 +636,15 @@ def analyze():
         reasons = [t(language, "safe_now")]
 
     risk_level = classify_risk(total_score)
+    if is_green_safe:
+        risk_level = "Low"
+
     return jsonify(
         {
             "score": total_score,
             "risk_level": risk_level,
+            "is_green_safe": is_green_safe,
+            "green_checks": green_checks,
             "reason_keys": reason_keys,
             "reasons": reasons,
             "explanation": build_explanation(language, risk_level, reason_keys, url_context),

@@ -1,2 +1,5 @@
 Flask
 flask-cors
+requests
+python-dotenv
+python-whois
