@@ -6,7 +6,7 @@ import ssl
 import socket
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import requests
 import whois
@@ -40,6 +40,19 @@ TRUSTED_TARGET_LABELS = (
     "visa",
     "mastercard",
 )
+SHORTENER_DOMAINS = (
+    "bit.ly",
+    "tinyurl.com",
+    "t.co",
+    "rb.gy",
+    "ow.ly",
+    "cutt.ly",
+    "is.gd",
+    "buff.ly",
+    "rebrand.ly",
+    "shorturl.at",
+)
+NON_WARNING_LOCAL_KEYS = {"short_link_expanded"}
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
 SUSPICIOUS_TLDS = (".xyz", ".top", ".click", ".site", ".store")
 SUSPICIOUS_MESSAGE_TERMS = (
@@ -79,6 +92,13 @@ I18N = {
         "vt_clean": "VirusTotal did not report malicious detections for this link.",
         "vt_pending": "VirusTotal scan started; results are still pending.",
         "vt_unavailable": "VirusTotal could not be reached right now.",
+        "urlscan_malicious": "URLScan flagged this link as malicious.",
+        "urlscan_suspicious": "URLScan detected suspicious indicators for this link.",
+        "urlscan_clean": "URLScan did not find malicious indicators for this link.",
+        "urlscan_pending": "URLScan scan started; results are still pending.",
+        "urlscan_unavailable": "URLScan could not be reached right now.",
+        "short_link_expanded": "Shortened link was expanded to its real destination.",
+        "short_link_unresolved": "Could not fully expand the shortened link destination.",
         "need_input": "Please enter a URL or full message text.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
@@ -112,6 +132,13 @@ I18N = {
         "vt_clean": "VirusTotal לא מצא אינדיקציות זדוניות בקישור.",
         "vt_pending": "נסרקה בקשה ל-VirusTotal, התוצאה עדיין מתעדכנת.",
         "vt_unavailable": "לא ניתן היה להגיע ל-VirusTotal כרגע.",
+        "urlscan_malicious": "URLScan סימן את הקישור כזדוני.",
+        "urlscan_suspicious": "URLScan זיהה אינדיקציות חשודות בקישור.",
+        "urlscan_clean": "URLScan לא מצא אינדיקציות זדוניות בקישור.",
+        "urlscan_pending": "נסרקה בקשה ל-URLScan, התוצאה עדיין מתעדכנת.",
+        "urlscan_unavailable": "לא ניתן היה להגיע ל-URLScan כרגע.",
+        "short_link_expanded": "לינק מקוצר נחשף ליעד האמיתי שלו.",
+        "short_link_unresolved": "לא ניתן היה לחשוף במלואו את היעד של הלינק המקוצר.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
@@ -287,6 +314,90 @@ def extract_first_url(text: str) -> str:
     if candidate.startswith("www."):
         return f"https://{candidate}"
     return candidate
+
+
+def normalize_url_for_checks(url: str) -> str:
+    if not url:
+        return ""
+    value = url.strip()
+    if "://" not in value:
+        value = f"https://{value}"
+    return value
+
+
+def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
+    """
+    Expand known shortened links to their final destination.
+    Returns (final_url, reason_keys, redirect_chain).
+    """
+    reason_keys: list[str] = []
+    redirect_chain: list[str] = []
+    normalized = normalize_url_for_checks(url)
+    if not normalized:
+        return normalized, reason_keys, redirect_chain
+
+    parsed = urlparse(normalized)
+    hostname = (parsed.hostname or "").lower()
+    is_short_domain = any(hostname == d or hostname.endswith(f".{d}") for d in SHORTENER_DOMAINS)
+    if not is_short_domain:
+        return normalized, reason_keys, redirect_chain
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    session = requests.Session()
+
+    # Strategy 1: HEAD with redirects (fast path)
+    try:
+        head_resp = session.head(normalized, allow_redirects=True, headers=headers, timeout=8)
+        head_chain = [r.url for r in head_resp.history] + [head_resp.url]
+        if head_chain:
+            redirect_chain = head_chain
+        if head_resp.url and head_resp.url != normalized:
+            reason_keys.append("short_link_expanded")
+            return head_resp.url, reason_keys, redirect_chain
+    except Exception:
+        pass
+
+    # Strategy 2: GET with redirects (some providers ignore HEAD)
+    try:
+        get_resp = session.get(normalized, allow_redirects=True, headers=headers, timeout=10)
+        get_chain = [r.url for r in get_resp.history] + [get_resp.url]
+        if get_chain:
+            redirect_chain = get_chain
+        if get_resp.url and get_resp.url != normalized:
+            reason_keys.append("short_link_expanded")
+            return get_resp.url, reason_keys, redirect_chain
+    except Exception:
+        pass
+
+    # Strategy 3: manual hop-by-hop follow of Location headers
+    try:
+        current = normalized
+        manual_chain = [current]
+        for _ in range(8):
+            hop = session.get(current, allow_redirects=False, headers=headers, timeout=8)
+            location = hop.headers.get("Location")
+            if not location:
+                break
+            next_url = urljoin(current, location)
+            manual_chain.append(next_url)
+            current = next_url
+        if len(manual_chain) > 1:
+            redirect_chain = manual_chain
+            reason_keys.append("short_link_expanded")
+            return manual_chain[-1], reason_keys, redirect_chain
+    except Exception:
+        pass
+
+    reason_keys.append("short_link_unresolved")
+    if not redirect_chain:
+        redirect_chain = [normalized]
+    return normalized, reason_keys, redirect_chain
 
 
 def analyze_url(url: str) -> tuple[int, list[str], dict]:
@@ -500,6 +611,45 @@ def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
         return 0, [], "vt_unavailable"
 
 
+def query_urlscan(url: str, api_key: str) -> tuple[int, list[str], str]:
+    """
+    Returns: (score_delta, reason_keys, intel_note_key)
+    """
+    headers = {"API-Key": api_key, "Content-Type": "application/json"}
+
+    try:
+        search_resp = requests.get(
+            "https://urlscan.io/api/v1/search/",
+            headers=headers,
+            params={"q": f'page.url:"{url}"', "size": 1},
+            timeout=8
+        )
+        if search_resp.ok:
+            results = search_resp.json().get("results", [])
+            if results:
+                overall = results[0].get("verdicts", {}).get("overall", {})
+                malicious = bool(overall.get("malicious"))
+                score = int(overall.get("score", 0) or 0)
+                categories = overall.get("categories", []) or []
+                if malicious:
+                    return min(60, 35 + max(0, score)), ["urlscan_malicious"], "intel_configured"
+                if score > 0 or len(categories) > 0:
+                    return min(40, 15 + max(0, score)), ["urlscan_suspicious"], "intel_configured"
+                return 0, ["urlscan_clean"], "intel_configured"
+
+        submit_resp = requests.post(
+            "https://urlscan.io/api/v1/scan/",
+            headers=headers,
+            json={"url": url, "visibility": "public"},
+            timeout=8
+        )
+        if submit_resp.ok:
+            return 0, ["urlscan_pending"], "intel_configured"
+        return 0, [], "urlscan_unavailable"
+    except Exception:
+        return 0, [], "urlscan_unavailable"
+
+
 def dns_resolves(hostname: str) -> bool:
     try:
         socket.getaddrinfo(hostname, None)
@@ -567,7 +717,15 @@ def analyze():
 
     # If user provided full message, extract URL automatically.
     extracted_url = extract_first_url(message)
-    url_to_check = raw_url or extracted_url
+    submitted_url = raw_url or extracted_url
+    normalized_submitted = normalize_url_for_checks(submitted_url)
+    expanded_url, short_link_reason_keys, redirect_chain = expand_short_url(normalized_submitted)
+    url_to_check = expanded_url or normalized_submitted
+    original_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
+    was_short_link = any(
+        original_host == d or original_host.endswith(f".{d}") for d in SHORTENER_DOMAINS
+    ) if original_host else False
+    short_link_resolved = "short_link_expanded" in short_link_reason_keys
 
     if not url_to_check and not message:
         return jsonify(
@@ -579,6 +737,7 @@ def analyze():
         ), 400
 
     url_score, url_reason_keys, url_context = analyze_url(url_to_check)
+    url_reason_keys.extend(short_link_reason_keys)
     text_score, text_reason_keys = analyze_message_text(message)
     intel_key, intel_sources = external_intel_status(url_to_check)
     intel_score = 0
@@ -592,7 +751,19 @@ def analyze():
         intel_reason_keys.extend(vt_reason_keys)
         intel_key = vt_note_key
 
+    if url_to_check and os.getenv("URLSCAN_API_KEY"):
+        us_score, us_reason_keys, us_note_key = query_urlscan(
+            url_to_check, os.getenv("URLSCAN_API_KEY", "")
+        )
+        intel_score += us_score
+        intel_reason_keys.extend(us_reason_keys)
+        intel_key = us_note_key
+
     total_score = min(100, url_score + text_score + intel_score)
+    vt_malicious_hit = "vt_malicious" in intel_reason_keys
+    if vt_malicious_hit:
+        # Hard rule: if VirusTotal marks URL as malicious, force high severity.
+        total_score = max(total_score, 85)
     reason_keys = url_reason_keys + text_reason_keys + intel_reason_keys
 
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
@@ -600,8 +771,13 @@ def analyze():
     dns_ok = dns_resolves(hostname) if hostname else False
     tls_ok = tls_certificate_valid(hostname) if hostname else False
     age_days = domain_age_days(hostname) if hostname else None
-    vt_clean = "vt_clean" in intel_reason_keys
-    no_local_warnings = len(url_reason_keys + text_reason_keys) == 0
+    vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
+    urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
+    vt_clean = "vt_clean" in intel_reason_keys or not vt_configured
+    urlscan_clean = "urlscan_clean" in intel_reason_keys or not urlscan_configured
+    local_reason_keys = url_reason_keys + text_reason_keys
+    local_warning_keys = [key for key in local_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
+    no_local_warnings = len(local_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
 
     age_status = "na"
@@ -611,13 +787,20 @@ def analyze():
     green_checks = [
         {"key": "no_local_warnings", "status": "pass" if no_local_warnings else "fail"},
         {"key": "vt_clean", "status": "pass" if vt_clean else "fail"},
+        {"key": "urlscan_clean", "status": "pass" if urlscan_clean else "fail"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
         {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
         {"key": "domain_age_180d", "status": age_status, "value": age_days},
     ]
+    if was_short_link:
+        green_checks.append(
+            {"key": "short_link_resolved", "status": "pass" if short_link_resolved else "fail"}
+        )
 
     # Core trust requirements must pass; domain age is supportive and can be unavailable.
-    core_pass = no_local_warnings and vt_clean and dns_ok and tls_ok
+    core_pass = no_local_warnings and vt_clean and urlscan_clean and dns_ok and tls_ok
+    if was_short_link:
+        core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
     is_green_safe = core_pass and age_not_risky
 
@@ -636,6 +819,8 @@ def analyze():
         reasons = [t(language, "safe_now")]
 
     risk_level = classify_risk(total_score)
+    if vt_malicious_hit:
+        risk_level = "High"
     if is_green_safe:
         risk_level = "Low"
 
@@ -645,6 +830,8 @@ def analyze():
             "risk_level": risk_level,
             "is_green_safe": is_green_safe,
             "green_checks": green_checks,
+            "submitted_url": normalized_submitted,
+            "redirect_chain": redirect_chain,
             "reason_keys": reason_keys,
             "reasons": reasons,
             "explanation": build_explanation(language, risk_level, reason_keys, url_context),

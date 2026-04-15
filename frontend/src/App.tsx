@@ -13,6 +13,8 @@ type AnalysisResponse = {
   risk_level: RiskLevel;
   is_green_safe?: boolean;
   green_checks?: GreenCheck[];
+  submitted_url?: string;
+  redirect_chain?: string[];
   reason_keys?: string[];
   reasons: string[];
   explanation?: string;
@@ -45,7 +47,9 @@ const translations = {
     score: "Score",
     scoreWithValue: "Score: {value}/100",
     reasons: "Reasons",
-    analyzedUrl: "Analyzed URL",
+    originalUrl: "Shortened URL",
+    analyzedUrl: "Real full URL",
+    redirectChain: "Redirect chain",
     explanationTitle: "Why this result"
     ,
     greenConditions: "Green safety conditions",
@@ -78,7 +82,9 @@ const translations = {
     score: "ציון",
     scoreWithValue: "ציון: {value}/100",
     reasons: "סיבות",
-    analyzedUrl: "קישור שנותח",
+    originalUrl: "קישור מקוצר",
+    analyzedUrl: "הקישור האמיתי המלא",
+    redirectChain: "שרשרת הפניות",
     explanationTitle: "למה התקבלה התוצאה"
     ,
     greenConditions: "תנאים למצב ירוק",
@@ -113,6 +119,13 @@ const reasonI18n = {
     vt_clean: "VirusTotal did not report malicious detections for this link.",
     vt_pending: "VirusTotal scan started; results are still pending.",
     vt_unavailable: "VirusTotal could not be reached right now.",
+    urlscan_malicious: "URLScan flagged this link as malicious.",
+    urlscan_suspicious: "URLScan detected suspicious indicators for this link.",
+    urlscan_clean: "URLScan did not find malicious indicators for this link.",
+    urlscan_pending: "URLScan scan started; results are still pending.",
+    urlscan_unavailable: "URLScan could not be reached right now.",
+    short_link_expanded: "Shortened link was expanded to its real destination.",
+    short_link_unresolved: "Could not fully expand the shortened link destination.",
     insufficient_trust_signals: "Not enough trust signals for a green/safe result.",
     intel_configured: "Security data sources are connected.",
     intel_missing: "Advanced security sources are not connected yet."
@@ -138,6 +151,13 @@ const reasonI18n = {
     vt_clean: "VirusTotal לא מצא אינדיקציות זדוניות בקישור.",
     vt_pending: "נסרקה בקשה ל-VirusTotal, התוצאה עדיין מתעדכנת.",
     vt_unavailable: "לא ניתן היה להגיע ל-VirusTotal כרגע.",
+    urlscan_malicious: "URLScan סימן את הקישור כזדוני.",
+    urlscan_suspicious: "URLScan זיהה אינדיקציות חשודות בקישור.",
+    urlscan_clean: "URLScan לא מצא אינדיקציות זדוניות בקישור.",
+    urlscan_pending: "נסרקה בקשה ל-URLScan, התוצאה עדיין מתעדכנת.",
+    urlscan_unavailable: "לא ניתן היה להגיע ל-URLScan כרגע.",
+    short_link_expanded: "לינק מקוצר נחשף ליעד האמיתי שלו.",
+    short_link_unresolved: "לא ניתן היה לחשוף במלואו את היעד של הלינק המקוצר.",
     insufficient_trust_signals: "אין מספיק אותות אמון כדי לתת מצב ירוק/בטוח.",
     intel_configured: "מקורות מידע אבטחתי מחוברים.",
     intel_missing: "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים."
@@ -186,8 +206,10 @@ export function App() {
   const getGreenCheckLabel = (check: GreenCheck): string => {
     if (check.key === "no_local_warnings") return language === "he" ? "ללא סימני אזהרה מקומיים" : "No local warning signals";
     if (check.key === "vt_clean") return language === "he" ? "VirusTotal נקי" : "VirusTotal clean result";
+    if (check.key === "urlscan_clean") return language === "he" ? "URLScan נקי" : "URLScan clean result";
     if (check.key === "dns_resolves") return language === "he" ? "DNS נפתר בהצלחה" : "DNS resolves correctly";
     if (check.key === "tls_valid") return language === "he" ? "תעודת HTTPS תקינה" : "Valid HTTPS certificate";
+    if (check.key === "short_link_resolved") return language === "he" ? "לינק מקוצר פוענח בהצלחה" : "Shortened link successfully resolved";
     if (check.key === "domain_age_180d") {
       if (language === "he") {
         return check.value != null ? `גיל דומיין מעל 180 יום (${check.value} ימים)` : "גיל דומיין מעל 180 יום";
@@ -314,10 +336,27 @@ export function App() {
                 {result.explanation ?? getExplanationText(result.risk_level)}
               </p>
             )}
+            {result.submitted_url && result.submitted_url !== result.analyzed_url && (
+              <p className="mixed-line">
+                {t.originalUrl}: <code>{result.submitted_url}</code>
+              </p>
+            )}
             {result.analyzed_url && (
               <p className="mixed-line">
                 {t.analyzedUrl}: <code>{result.analyzed_url}</code>
               </p>
+            )}
+            {result.redirect_chain && result.redirect_chain.length > 1 && (
+              <>
+                <p>{t.redirectChain}:</p>
+                <ul className="reasons-list">
+                  {result.redirect_chain.map((step) => (
+                    <li key={step} className="mixed-line">
+                      <code>{step}</code>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
             <p>{t.reasons}:</p>
             <ul className="reasons-list">
