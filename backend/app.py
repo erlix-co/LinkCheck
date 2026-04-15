@@ -74,6 +74,7 @@ I18N = {
         "brand": "Looks like a known brand imitation.",
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
+        "at_sign_userinfo": "URL uses '@' to hide the real destination domain.",
         "case_confusable": "Domain uses mixed uppercase/lowercase letters to mimic another character.",
         "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
         "unicode_lookalike": "Link uses lookalike Unicode characters.",
@@ -85,6 +86,10 @@ I18N = {
         "message_pressure": "The message uses pressure or urgency language.",
         "message_short_link": "Short message with a link can be suspicious.",
         "message_aggressive": "Aggressive punctuation detected.",
+        "ai_social_engineering": "Message intent looks like social engineering (pressure + action request).",
+        "ai_authority_impersonation": "Message appears to impersonate an official organization/brand.",
+        "ai_sensitive_request": "Message asks for sensitive action (login/payment/verification).",
+        "ai_threat_or_reward": "Message uses threat or reward language to force quick action.",
         "intel_configured": "Security data sources are connected: {sources}.",
         "intel_missing": "Advanced security sources are not connected yet.",
         "vt_malicious": "VirusTotal reports this link as malicious.",
@@ -114,6 +119,7 @@ I18N = {
         "brand": "נראה כמו התחזות למותג מוכר.",
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
+        "at_sign_userinfo": "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
         "case_confusable": "הדומיין משתמש בערבוב אותיות גדולות/קטנות כדי להטעות חזותית.",
         "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
         "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
@@ -125,6 +131,10 @@ I18N = {
         "message_pressure": "יש בהודעה ניסוח מלחיץ או דחוף.",
         "message_short_link": "הודעה קצרה עם קישור יכולה להיות חשודה.",
         "message_aggressive": "נמצאו סימני פיסוק אגרסיביים.",
+        "ai_social_engineering": "נראית כוונת הנדסה חברתית בהודעה (לחץ + בקשה לפעולה).",
+        "ai_authority_impersonation": "נראה שההודעה מתחזה לגורם רשמי/מותג מוכר.",
+        "ai_sensitive_request": "ההודעה מבקשת פעולה רגישה (כניסה/תשלום/אימות).",
+        "ai_threat_or_reward": "ההודעה משתמשת באיום או פיתוי כדי לדחוף לפעולה מהירה.",
         "intel_configured": "מקורות מידע אבטחתי מחוברים: {sources}.",
         "intel_missing": "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים.",
         "vt_malicious": "VirusTotal מדווח שהקישור זדוני.",
@@ -290,6 +300,21 @@ def get_primary_label(hostname: str) -> str:
     return parts[-2]
 
 
+def get_registrable_domain(hostname: str) -> str:
+    """Return the main registrable domain (e.g. verify-user.co, example.co.il)."""
+    host = (hostname or "").lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    if len(parts) < 2:
+        return host
+
+    il_second_level = {"ac", "co", "org", "gov", "net", "muni", "k12", "idf"}
+    if len(parts) >= 3 and parts[-1] == "il" and parts[-2] in il_second_level:
+        return f"{parts[-3]}.{parts[-2]}.{parts[-1]}"
+    return f"{parts[-2]}.{parts[-1]}"
+
+
 def extract_host_preserve_case(parsed_url) -> str:
     """
     Extract hostname while preserving original casing from netloc.
@@ -426,6 +451,7 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
     hostname = (parsed.hostname or "").lower()
     host_case_raw = extract_host_preserve_case(parsed)
+    netloc_raw = parsed.netloc or ""
 
     # Basic format validation: require a hostname like example.com.
     if not hostname or "." not in hostname:
@@ -487,6 +513,11 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         score += 70
         reasons.append("case_confusable")
 
+    # Rule: URLs with userinfo (@) are a classic phishing obfuscation trick.
+    if "@" in netloc_raw:
+        score += 100
+        reasons.append("at_sign_userinfo")
+
     # Rule: very long URLs often hide malicious intent.
     if len(normalized_url) > 75:
         score += 10
@@ -531,6 +562,65 @@ def analyze_message_text(message: str) -> tuple[int, list[str]]:
         reasons.append("message_aggressive")
 
     return score, reasons
+
+
+def analyze_message_intent(message: str) -> tuple[int, list[str]]:
+    """
+    AI-like intent layer (without hardcoding one exact phrase):
+    scores social-engineering patterns by combining multiple semantic signals.
+    """
+    text = (message or "").strip().lower()
+    if not text:
+        return 0, []
+
+    urgency_terms = [
+        "urgent", "immediately", "now", "today", "asap",
+        "דחוף", "מייד", "מיידית", "עכשיו", "בהקדם", "לאלתר", "מיידי"
+    ]
+    authority_terms = [
+        "bank", "paypal", "amazon", "company", "security team", "support",
+        "בנק", "חברת", "חברה", "מחלקת אבטחה", "צוות אבטחה", "תמיכה", "שירות לקוחות"
+    ]
+    sensitive_action_terms = [
+        "login", "verify", "confirm", "password", "payment", "card", "otp", "secure your account",
+        "התחבר", "אימות", "אשר", "סיסמה", "תשלום", "כרטיס", "קוד",
+        "חשבון", "חשבונך", "אבטח", "לאבטח", "אבטחה", "אשר את חשבונך"
+    ]
+    threat_or_reward_terms = [
+        "suspended", "blocked", "penalty", "fine", "won", "gift", "will be blocked", "account locked",
+        "נחסם", "ייחסם", "יחסם", "יושעה", "הושעה", "קנס", "תזכה", "זכית", "מתנה"
+    ]
+
+    has_urgency = any(term in text for term in urgency_terms)
+    has_authority = any(term in text for term in authority_terms)
+    has_sensitive_request = any(term in text for term in sensitive_action_terms)
+    has_threat_or_reward = any(term in text for term in threat_or_reward_terms)
+    has_imperative_pattern = bool(
+        re.search(r"(הכנס|לחץ|אשר|עדכן|התחבר).*(מייד|עכשיו|לאלתר|בהקדם)", text)
+    )
+
+    score = 0
+    reasons: list[str] = []
+
+    # Composite signals - the core of social engineering.
+    if has_urgency and has_sensitive_request:
+        score += 20
+        reasons.append("ai_social_engineering")
+    if has_authority and has_sensitive_request:
+        score += 20
+        reasons.append("ai_authority_impersonation")
+    if has_sensitive_request:
+        score += 10
+        reasons.append("ai_sensitive_request")
+    if has_threat_or_reward and (has_sensitive_request or has_urgency):
+        score += 15
+        reasons.append("ai_threat_or_reward")
+    if has_imperative_pattern and has_sensitive_request:
+        score += 15
+        if "ai_social_engineering" not in reasons:
+            reasons.append("ai_social_engineering")
+
+    return min(45, score), reasons
 
 
 def external_intel_status(url: str) -> tuple[str, list[str]]:
@@ -739,6 +829,7 @@ def analyze():
     url_score, url_reason_keys, url_context = analyze_url(url_to_check)
     url_reason_keys.extend(short_link_reason_keys)
     text_score, text_reason_keys = analyze_message_text(message)
+    intent_score, intent_reason_keys = analyze_message_intent(message)
     intel_key, intel_sources = external_intel_status(url_to_check)
     intel_score = 0
     intel_reason_keys: list[str] = []
@@ -759,15 +850,18 @@ def analyze():
         intel_reason_keys.extend(us_reason_keys)
         intel_key = us_note_key
 
-    total_score = min(100, url_score + text_score + intel_score)
+    total_score = min(100, url_score + text_score + intent_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     if vt_malicious_hit:
         # Hard rule: if VirusTotal marks URL as malicious, force high severity.
         total_score = max(total_score, 85)
-    reason_keys = url_reason_keys + text_reason_keys + intel_reason_keys
+    reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys + intel_reason_keys
 
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
     hostname = (parsed.hostname or "").lower()
+    registrable_domain = get_registrable_domain(hostname) if hostname else ""
+    host_no_www = hostname[4:] if hostname.startswith("www.") else hostname
+    has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
     dns_ok = dns_resolves(hostname) if hostname else False
     tls_ok = tls_certificate_valid(hostname) if hostname else False
     age_days = domain_age_days(hostname) if hostname else None
@@ -775,7 +869,7 @@ def analyze():
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
     vt_clean = "vt_clean" in intel_reason_keys or not vt_configured
     urlscan_clean = "urlscan_clean" in intel_reason_keys or not urlscan_configured
-    local_reason_keys = url_reason_keys + text_reason_keys
+    local_reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys
     local_warning_keys = [key for key in local_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
     no_local_warnings = len(local_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
@@ -832,6 +926,8 @@ def analyze():
             "green_checks": green_checks,
             "submitted_url": normalized_submitted,
             "redirect_chain": redirect_chain,
+            "registrable_domain": registrable_domain,
+            "has_subdomains": has_subdomains,
             "reason_keys": reason_keys,
             "reasons": reasons,
             "explanation": build_explanation(language, risk_level, reason_keys, url_context),

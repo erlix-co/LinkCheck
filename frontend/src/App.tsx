@@ -15,6 +15,8 @@ type AnalysisResponse = {
   green_checks?: GreenCheck[];
   submitted_url?: string;
   redirect_chain?: string[];
+  registrable_domain?: string;
+  has_subdomains?: boolean;
   reason_keys?: string[];
   reasons: string[];
   explanation?: string;
@@ -44,12 +46,11 @@ const translations = {
     low: "Safe",
     medium: "Medium",
     high: "High",
-    score: "Score",
-    scoreWithValue: "Score: {value}/100",
     reasons: "Reasons",
     originalUrl: "Shortened URL",
     analyzedUrl: "Real full URL",
     redirectChain: "Redirect chain",
+    mainDomain: "Main domain of this URL",
     explanationTitle: "Why this result"
     ,
     greenConditions: "Green safety conditions",
@@ -79,12 +80,11 @@ const translations = {
     low: "בטוח",
     medium: "בינונית",
     high: "גבוהה",
-    score: "ציון",
-    scoreWithValue: "ציון: {value}/100",
     reasons: "סיבות",
     originalUrl: "קישור מקוצר",
     analyzedUrl: "הקישור האמיתי המלא",
     redirectChain: "שרשרת הפניות",
+    mainDomain: "הדומיין הראשי של קישור זה הינו",
     explanationTitle: "למה התקבלה התוצאה"
     ,
     greenConditions: "תנאים למצב ירוק",
@@ -103,6 +103,7 @@ const reasonI18n = {
     brand: "Looks like a known brand imitation.",
     suspicious_words: "Contains words commonly used in phishing.",
     lookalike_brand: "Domain name is almost identical to a known brand/domain (one-character trick).",
+    at_sign_userinfo: "URL uses '@' to hide the real destination domain.",
     case_confusable: "Domain uses mixed uppercase/lowercase letters to mimic another character.",
     mixed_scripts: "Link mixes different alphabets (common phishing trick).",
     unicode_lookalike: "Link uses lookalike Unicode characters.",
@@ -135,6 +136,7 @@ const reasonI18n = {
     brand: "נראה כמו התחזות למותג מוכר.",
     suspicious_words: "יש מילים אופייניות לניסיונות פישינג.",
     lookalike_brand: "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
+    at_sign_userinfo: "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
     case_confusable: "הדומיין משתמש בערבוב אותיות גדולות/קטנות כדי להטעות חזותית.",
     mixed_scripts: "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
     unicode_lookalike: "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
@@ -164,7 +166,7 @@ const reasonI18n = {
   }
 } as const;
 
-const urlRegex = /^(https?:\/\/)?([\w-]+\.)+[\w-]+([/?#].*)?$/i;
+const urlRegex = /^(https?:\/\/)?([^\s/$.?#].[^\s]*)$/i;
 const detectedLanguage: Language = navigator.language.toLowerCase().startsWith("he") ? "he" : "en";
 
 export function App() {
@@ -193,9 +195,6 @@ export function App() {
     if (riskLevel === "High") return "⛔";
     return "⚠️";
   };
-
-  const getScoreLabel = (scoreValue: number): string =>
-    t.scoreWithValue.replace("{value}", String(scoreValue));
 
   const getExplanationText = (riskLevel: RiskLevel): string => {
     if (riskLevel === "High") return t.explainHigh;
@@ -327,9 +326,6 @@ export function App() {
                 {getRiskIcon(result.risk_level)} {getRiskLabel(result.risk_level)}
               </span>
             </p>
-            <p>
-              {getScoreLabel(result.score)}
-            </p>
             {result.risk_level !== "Low" && (
               <p>
                 <strong>{t.explanationTitle}:</strong>{" "}
@@ -341,9 +337,14 @@ export function App() {
                 {t.originalUrl}: <code>{result.submitted_url}</code>
               </p>
             )}
-            {result.analyzed_url && (
+            {result.analyzed_url && result.submitted_url && result.submitted_url !== result.analyzed_url && (
               <p className="mixed-line">
                 {t.analyzedUrl}: <code>{result.analyzed_url}</code>
+              </p>
+            )}
+            {result.has_subdomains && result.registrable_domain && (
+              <p className="mixed-line">
+                {t.mainDomain}: <code>{result.registrable_domain}</code>
               </p>
             )}
             {result.redirect_chain && result.redirect_chain.length > 1 && (
