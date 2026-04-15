@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import unicodedata
@@ -18,6 +19,7 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 BRAND_PATTERNS = ("nike", "paypal", "benetton", "amazon")
 PROTECTED_BRANDS = ("bankisrael", "paypal", "amazon", "nike", "benetton")
@@ -90,6 +92,10 @@ I18N = {
         "ai_authority_impersonation": "Message appears to impersonate an official organization/brand.",
         "ai_sensitive_request": "Message asks for sensitive action (login/payment/verification).",
         "ai_threat_or_reward": "Message uses threat or reward language to force quick action.",
+        "ai_model_social_engineering": "AI detected social-engineering intent in the message.",
+        "ai_model_impersonation": "AI detected likely impersonation of a trusted organization.",
+        "ai_model_sensitive_action": "AI detected request for sensitive user action.",
+        "ai_model_unavailable": "AI semantic analysis is currently unavailable.",
         "intel_configured": "Security data sources are connected: {sources}.",
         "intel_missing": "Advanced security sources are not connected yet.",
         "vt_malicious": "VirusTotal reports this link as malicious.",
@@ -135,6 +141,10 @@ I18N = {
         "ai_authority_impersonation": "נראה שההודעה מתחזה לגורם רשמי/מותג מוכר.",
         "ai_sensitive_request": "ההודעה מבקשת פעולה רגישה (כניסה/תשלום/אימות).",
         "ai_threat_or_reward": "ההודעה משתמשת באיום או פיתוי כדי לדחוף לפעולה מהירה.",
+        "ai_model_social_engineering": "מנוע ה-AI זיהה כוונת הנדסה חברתית בהודעה.",
+        "ai_model_impersonation": "מנוע ה-AI זיהה חשד להתחזות לגורם אמין.",
+        "ai_model_sensitive_action": "מנוע ה-AI זיהה בקשה לפעולה רגישה מצד המשתמש.",
+        "ai_model_unavailable": "ניתוח סמנטי מבוסס AI אינו זמין כרגע.",
         "intel_configured": "מקורות מידע אבטחתי מחוברים: {sources}.",
         "intel_missing": "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים.",
         "vt_malicious": "VirusTotal מדווח שהקישור זדוני.",
@@ -623,25 +633,91 @@ def analyze_message_intent(message: str) -> tuple[int, list[str]]:
     return min(45, score), reasons
 
 
+def analyze_message_intent_with_model(message: str, url: str) -> tuple[int, list[str]]:
+    """
+    Optional real AI layer.
+    Returns additional score + reason keys.
+    Falls back safely when model is unavailable.
+    """
+    if not message or not gemini_api_key:
+        return 0, []
+
+    schema_prompt = """
+You are a phishing detection assistant.
+Analyze the message and URL semantically.
+Return STRICT JSON only with these boolean keys:
+- social_engineering
+- impersonation
+- sensitive_action
+"""
+
+    try:
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.5-flash:generateContent"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": (
+                                f"{schema_prompt}\n\n"
+                                f"message: {message}\n"
+                                f"url: {url}\n"
+                            )
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0,
+                "responseMimeType": "application/json"
+            }
+        }
+        resp = requests.post(
+            f"{endpoint}?key={gemini_api_key}",
+            json=payload,
+            timeout=10
+        )
+        if not resp.ok:
+            return 0, ["ai_model_unavailable"]
+
+        body = resp.json()
+        text = (
+            body.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "{}")
+        )
+        parsed = json.loads(text)
+
+        score = 0
+        reasons: list[str] = []
+        if bool(parsed.get("social_engineering")):
+            score += 20
+            reasons.append("ai_model_social_engineering")
+        if bool(parsed.get("impersonation")):
+            score += 20
+            reasons.append("ai_model_impersonation")
+        if bool(parsed.get("sensitive_action")):
+            score += 15
+            reasons.append("ai_model_sensitive_action")
+
+        return min(45, score), reasons
+    except Exception:
+        return 0, ["ai_model_unavailable"]
+
+
 def external_intel_status(url: str) -> tuple[str, list[str]]:
-    """
-    Placeholder for external intelligence sources.
-    We intentionally keep this MVP safe and explicit:
-    integrations require API keys and provider-specific workflows.
-    """
     if not url:
         return "", []
 
     enabled_sources = []
-
     if os.getenv("VIRUSTOTAL_API_KEY"):
         enabled_sources.append("VirusTotal")
     if os.getenv("URLSCAN_API_KEY"):
         enabled_sources.append("URLScan")
-    if os.getenv("WHOISXML_API_KEY"):
-        enabled_sources.append("WHOIS")
-    if os.getenv("DNS_CHECK_API_KEY"):
-        enabled_sources.append("DNS")
 
     if enabled_sources:
         return "intel_configured", enabled_sources
@@ -830,6 +906,7 @@ def analyze():
     url_reason_keys.extend(short_link_reason_keys)
     text_score, text_reason_keys = analyze_message_text(message)
     intent_score, intent_reason_keys = analyze_message_intent(message)
+    model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
     intel_key, intel_sources = external_intel_status(url_to_check)
     intel_score = 0
     intel_reason_keys: list[str] = []
@@ -850,12 +927,18 @@ def analyze():
         intel_reason_keys.extend(us_reason_keys)
         intel_key = us_note_key
 
-    total_score = min(100, url_score + text_score + intent_score + intel_score)
+    total_score = min(100, url_score + text_score + intent_score + model_intent_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     if vt_malicious_hit:
         # Hard rule: if VirusTotal marks URL as malicious, force high severity.
         total_score = max(total_score, 85)
-    reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys + intel_reason_keys
+    reason_keys = (
+        url_reason_keys
+        + text_reason_keys
+        + intent_reason_keys
+        + model_intent_reason_keys
+        + intel_reason_keys
+    )
 
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
     hostname = (parsed.hostname or "").lower()
@@ -867,9 +950,11 @@ def analyze():
     age_days = domain_age_days(hostname) if hostname else None
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
-    vt_clean = "vt_clean" in intel_reason_keys or not vt_configured
-    urlscan_clean = "urlscan_clean" in intel_reason_keys or not urlscan_configured
-    local_reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys
+    vt_clean = not vt_configured or "vt_clean" in intel_reason_keys
+    vt_checked = vt_configured
+    urlscan_clean = not urlscan_configured or "urlscan_clean" in intel_reason_keys
+    urlscan_checked = urlscan_configured
+    local_reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys + model_intent_reason_keys
     local_warning_keys = [key for key in local_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
     no_local_warnings = len(local_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
@@ -880,8 +965,8 @@ def analyze():
 
     green_checks = [
         {"key": "no_local_warnings", "status": "pass" if no_local_warnings else "fail"},
-        {"key": "vt_clean", "status": "pass" if vt_clean else "fail"},
-        {"key": "urlscan_clean", "status": "pass" if urlscan_clean else "fail"},
+        {"key": "vt_clean", "status": ("pass" if vt_clean else "fail") if vt_checked else "na"},
+        {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
         {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
         {"key": "domain_age_180d", "status": age_status, "value": age_days},
@@ -891,16 +976,28 @@ def analyze():
             {"key": "short_link_resolved", "status": "pass" if short_link_resolved else "fail"}
         )
 
-    # Core trust requirements must pass; domain age is supportive and can be unavailable.
-    core_pass = no_local_warnings and vt_clean and urlscan_clean and dns_ok and tls_ok
+    # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
+    vt_passes = (not vt_checked) or vt_clean
+    urlscan_passes = (not urlscan_checked) or urlscan_clean
+    core_pass = no_local_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok
     if was_short_link:
         core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
     is_green_safe = core_pass and age_not_risky
 
-    if not is_green_safe and total_score == 0:
-        total_score = 25
-        reason_keys.append("insufficient_trust_signals")
+    failed_green_checks = [item for item in green_checks if item["status"] == "fail"]
+    if not is_green_safe:
+        # Add weighted floor by number of failed trust checks.
+        fail_count = len(failed_green_checks)
+        if fail_count >= 3:
+            total_score = max(total_score, 55)
+        elif fail_count == 2:
+            total_score = max(total_score, 40)
+        elif fail_count == 1:
+            total_score = max(total_score, 25)
+
+        if "insufficient_trust_signals" not in reason_keys:
+            reason_keys.append("insufficient_trust_signals")
 
     reasons = [t(language, key) for key in reason_keys]
     intel_note = ""
@@ -912,11 +1009,13 @@ def analyze():
     if not reasons:
         reasons = [t(language, "safe_now")]
 
-    risk_level = classify_risk(total_score)
-    if vt_malicious_hit:
-        risk_level = "High"
+    # Green is granted only when all required trust signals pass.
     if is_green_safe:
         risk_level = "Low"
+    else:
+        risk_level = "High" if total_score > 60 else "Medium"
+    if vt_malicious_hit:
+        risk_level = "High"
 
     return jsonify(
         {
