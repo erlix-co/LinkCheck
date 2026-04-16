@@ -27,6 +27,9 @@ type AnalysisResponse = {
   intel_note?: string;
   analyzed_url?: string;
   decoded_url?: string;
+  lookalike_target?: string;
+  lookalike_seen?: string;
+  brand_target?: string;
 };
 
 type Language = "en" | "he";
@@ -206,6 +209,11 @@ const checkLabels: Record<string, Record<Language, string>> = {
 
 const urlRegex = /^(https?:\/\/)?([^\s/$.?#].[^\s]*)$/i;
 const detectedLanguage: Language = navigator.language.toLowerCase().startsWith("en") ? "en" : "he";
+const defaultApiBaseUrl =
+  typeof window !== "undefined"
+    ? `http://${window.location.hostname}:5000`
+    : "http://localhost:5000";
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).replace(/\/+$/, "");
 
 /* ═══════════════════════════════════════
    APP COMPONENT
@@ -242,9 +250,28 @@ export function App() {
 
   const getLocalizedReasons = (data: AnalysisResponse): string[] => {
     if (data.reason_keys?.length) {
-      return data.reason_keys.map(
-        (key) => reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key
-      );
+      return data.reason_keys.map((key) => {
+        if (key === "lookalike_brand") {
+          const target = (data.lookalike_target || "").trim();
+          if (target) {
+            if (language === "he") {
+              return `הקישור אינו ${target} אלא ניסיון חיקוי!`;
+            }
+            return `This is not ${target}. It is likely an imitation attempt!`;
+          }
+        }
+        if (key === "brand") {
+          const target = (data.brand_target || "").trim();
+          if (target) {
+            const trustedName = `${target}.com`;
+            if (language === "he") {
+              return `הקישור אינו ${trustedName} אלא ניסיון חיקוי!`;
+            }
+            return `This is not ${trustedName}. It is likely an imitation attempt!`;
+          }
+        }
+        return reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key;
+      });
     }
     return data.reasons;
   };
@@ -279,7 +306,7 @@ export function App() {
 
     setLoading(true);
     try {
-      const response = await fetch("http://localhost:5000/analyze", {
+      const response = await fetch(`${apiBaseUrl}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),

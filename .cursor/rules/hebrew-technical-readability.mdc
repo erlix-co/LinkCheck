@@ -1,0 +1,28 @@
+---
+description: Readable Hebrew chat — isolate English technical terms to fix RTL/LTR mixing
+alwaysApply: true
+---
+
+# Hebrew + English technical readability
+
+When the user writes in Hebrew (or the reply is primarily Hebrew), follow these rules so mixed RTL/LTR text stays readable in Cursor chat:
+
+## Isolate English technical tokens
+
+- Wrap **every** English identifier, path, command, or API name in backticks: `SAFE`, `registrable`, `BRAND_PATTERNS`, `git push`, `App.tsx`.
+- Do **not** embed raw English words inside a long Hebrew sentence without backticks — that breaks bidi layout.
+
+## Structure
+
+- Prefer **short paragraphs**; one idea per paragraph.
+- For multiple technical terms, use a **bullet list**: each line starts with the term in backticks, then Hebrew explanation (e.g. `- \`term\` — הסבר קצר`).
+- Put **comparisons or code phrases** on their own line in a fenced block or after a line break, not mid-sentence Hebrew.
+
+## Avoid
+
+- Long Hebrew sentences with many inline English fragments.
+- Parentheses mixing Hebrew and English in one clause (split into two sentences or use bullets).
+
+## Optional gloss
+
+When helpful for non-developer clarity, add a one-word Hebrew gloss after the first mention: `VirusTotal` (מאגר איומים).

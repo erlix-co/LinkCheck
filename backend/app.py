@@ -42,6 +42,22 @@ TRUSTED_TARGET_LABELS = (
     "visa",
     "mastercard",
 )
+TRUSTED_ROOT_DOMAINS = {
+    "paypal.com",
+    "amazon.com",
+    "apple.com",
+    "google.com",
+    "microsoft.com",
+    "facebook.com",
+    "instagram.com",
+    "whatsapp.com",
+    "visa.com",
+    "mastercard.com",
+    "bankhapoalim.co.il",
+    "leumi.co.il",
+    "discountbank.co.il",
+    "mizrahi-tefahot.co.il",
+}
 SHORTENER_DOMAINS = (
     "bit.ly",
     "tinyurl.com",
@@ -55,6 +71,17 @@ SHORTENER_DOMAINS = (
     "shorturl.at",
 )
 NON_WARNING_LOCAL_KEYS = {"short_link_expanded"}
+WEAK_LOCAL_WARNING_KEYS = {"brand", "suspicious_words", "long_url", "many_hyphens"}
+STRONG_LOCAL_WARNING_KEYS = {
+    "lookalike_brand",
+    "at_sign_userinfo",
+    "case_confusable",
+    "mixed_scripts",
+    "unicode_lookalike",
+    "punycode",
+    "suspicious_tld",
+    "no_https",
+}
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
 SUSPICIOUS_TLDS = (".xyz", ".top", ".click", ".site", ".store")
 SUSPICIOUS_MESSAGE_TERMS = (
@@ -493,9 +520,11 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     lower_url = normalized_url.lower()
 
     # Rule: brand-like words can indicate impersonation attempts.
-    if any(pattern in lower_url for pattern in BRAND_PATTERNS):
+    brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
+    if brand_hit:
         score += 20
         reasons.append("brand")
+        context["brand_target"] = brand_hit
 
     # Rule: suspicious account/action words are common in phishing.
     if any(word in lower_url for word in SUSPICIOUS_WORDS):
@@ -983,6 +1012,23 @@ def analyze():
 
     url_score, url_reason_keys, url_context = analyze_url(url_to_check)
     url_reason_keys.extend(short_link_reason_keys)
+    parsed_for_trust = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
+    hostname_for_trust = (parsed_for_trust.hostname or "").lower()
+    registrable_for_trust = get_registrable_domain(hostname_for_trust) if hostname_for_trust else ""
+    is_trusted_root_domain = registrable_for_trust in TRUSTED_ROOT_DOMAINS
+
+    # Trusted root domains reduce risk when only weak, lexical hints were triggered.
+    has_strong_local = any(key in STRONG_LOCAL_WARNING_KEYS for key in url_reason_keys)
+    if is_trusted_root_domain and not has_strong_local:
+        original_len = len(url_reason_keys)
+        url_reason_keys = [
+            key for key in url_reason_keys
+            if key not in WEAK_LOCAL_WARNING_KEYS
+        ]
+        removed_weak_count = original_len - len(url_reason_keys)
+        if removed_weak_count > 0:
+            url_score = max(0, url_score - (removed_weak_count * 15))
+
     text_score, text_reason_keys = analyze_message_text(message)
     intent_score, intent_reason_keys = analyze_message_intent(message)
     model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
@@ -1115,7 +1161,10 @@ def analyze():
             "explanation": build_explanation(language, risk_level, reason_keys, url_context),
             "intel_note": intel_note,
             "analyzed_url": url_to_check,
-            "decoded_url": decoded_url
+            "decoded_url": decoded_url,
+            "lookalike_target": url_context.get("lookalike_target", ""),
+            "lookalike_seen": url_context.get("lookalike_seen", ""),
+            "brand_target": url_context.get("brand_target", ""),
         }
     )
 
