@@ -1,0 +1,104 @@
+# LinkCheck — Phishing Detection Tool by Erlix
+
+## Project Overview
+
+A bilingual (Hebrew/English) web tool that analyzes URLs and message text for phishing risk.
+Users are non-technical people who received a suspicious SMS/WhatsApp/email and want to check if a link is safe.
+Primary audience: Hebrew speakers on mobile devices.
+
+## Architecture
+
+```
+backend/app.py           — Flask API, single endpoint POST /analyze
+backend/requirements.txt — Flask, flask-cors, requests, python-dotenv, python-whois
+backend/.env             — API keys (GEMINI_API_KEY, VIRUSTOTAL_API_KEY) — NOT in git
+
+frontend/index.html      — Vite entry, loads Google Fonts (Space Grotesk, Rubik)
+frontend/src/main.tsx    — React entry
+frontend/src/App.tsx     — Full app component with all UI logic and i18n
+frontend/src/styles.css  — Complete design system, dark theme, CSS custom properties
+frontend/public/logo.png — Erlix logo
+```
+
+## Running Locally
+
+Backend:
+```bash
+cd backend
+python -m venv .venv        # already exists
+.venv/Scripts/activate      # Windows
+pip install -r requirements.txt
+python app.py               # runs on port 5000
+```
+
+Frontend:
+```bash
+cd frontend
+npm install
+npx vite                    # runs on port 5173
+```
+
+## Backend Analysis Pipeline (app.py)
+
+The POST /analyze endpoint runs these layers in order:
+1. **URL extraction** — extracts first URL from message text (supports bare shortener domains like bit.ly/abc)
+2. **Short link expansion** — 3 strategies: HEAD redirects, GET redirects, manual hop-by-hop
+3. **URL heuristics** — lookalike domains, mixed scripts, punycode, unicode homoglyphs, suspicious TLDs, case mixing, at-sign tricks
+4. **Message text analysis** — urgency words, short messages with links, aggressive punctuation
+5. **Intent analysis (rule-based)** — social engineering patterns, authority impersonation, sensitive requests, threats/rewards
+6. **Intent analysis (Gemini AI)** — optional semantic analysis via Gemini 2.5 Flash API, falls back gracefully
+7. **External intel** — VirusTotal (connected), URLScan (not connected yet)
+8. **Trust signals** — DNS resolution, TLS certificate validation, WHOIS domain age
+
+### Key Scoring Logic
+
+- When URL has NO heuristic warnings: message scores are informational only (don't affect total score)
+- When URL HAS warnings: full scoring applies (URL + message + intent + intel)
+- Green/safe result requires: no URL warnings + DNS ok + TLS ok + VT clean (if connected) + URLScan clean (if connected) + domain age > 30 days
+- Unconfigured services show "N/A", not false pass
+- VirusTotal malicious hit forces High risk regardless of score
+
+### API Keys (in backend/.env)
+
+- GEMINI_API_KEY — Gemini 2.5 Flash for semantic message analysis
+- VIRUSTOTAL_API_KEY — URL reputation checking
+- URLSCAN_API_KEY — not configured yet (free to sign up at urlscan.io)
+
+## Frontend Design System
+
+- **Theme:** dark navy (#060d1f base), derived from Erlix logo palette
+- **Fonts:** Space Grotesk (headings/display), Rubik (body/Hebrew)
+- **Mobile-first:** primary users are on phones
+- **RTL:** full right-to-left support for Hebrew, dir attribute switches with language
+- **Default language:** Hebrew (falls back to English only if browser is explicitly English)
+- **Risk display:** visual verdict banner with shield icon, color-coded (green/amber/red)
+- **Animations:** fade-slide-up on load, scanning spinner, glow pulse on logo
+
+### CSS Custom Properties
+
+All colors, spacing, fonts, and radii are defined as CSS variables in :root.
+Use them consistently. Don't hardcode values.
+
+## Important Design Decisions
+
+1. **Message warnings vs URL trust:** message urgency alone does NOT cause Medium/High risk if the URL is verified safe. This was a deliberate fix to prevent false positives (e.g., "דחוף! www.google.co.il" should be Low risk).
+2. **Short link extraction:** regex catches both https://bit.ly/abc and bare bit.ly/abc in message text.
+3. **Green checks honesty:** services that aren't connected show "N/A" status, never fake "pass".
+4. **Language consistency:** UI translations are local (in App.tsx), not dependent on backend response language.
+5. **Gemini integration:** uses raw REST API (not SDK), response parsed with json.loads. Falls back to rule-based analysis if unavailable.
+
+## Coding Conventions
+
+- Python: type hints on function signatures, tuple returns for multi-value
+- TypeScript: strict types for API response, discriminated unions for risk levels
+- CSS: BEM-like naming (.block__element--modifier), CSS custom properties for all values
+- i18n: all user-facing strings in translation objects, never hardcoded
+- Hebrew RTL: use logical properties (padding-inline-start, inset-inline-end), dir="ltr" on URL inputs
+
+## What NOT to Do
+
+- Don't commit .env files or API keys
+- Don't add npm packages to the root (frontend has its own package.json in frontend/)
+- Don't break the scoring separation between URL trust and message analysis
+- Don't show technical jargon in the UI (users are non-technical)
+- Don't use inline styles — everything goes through the CSS design system
