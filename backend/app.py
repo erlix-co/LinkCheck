@@ -936,7 +936,12 @@ def analyze():
         intel_reason_keys.extend(us_reason_keys)
         intel_key = us_note_key
 
-    total_score = min(100, url_score + text_score + intent_score + model_intent_score + intel_score)
+    # When URL has no heuristic warnings, message scores are informational only (capped).
+    url_has_warnings = len([key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]) > 0
+    if url_has_warnings:
+        total_score = min(100, url_score + text_score + intent_score + model_intent_score + intel_score)
+    else:
+        total_score = min(100, url_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     if vt_malicious_hit:
         # Hard rule: if VirusTotal marks URL as malicious, force high severity.
@@ -963,9 +968,8 @@ def analyze():
     vt_checked = vt_configured
     urlscan_clean = not urlscan_configured or "urlscan_clean" in intel_reason_keys
     urlscan_checked = urlscan_configured
-    local_reason_keys = url_reason_keys + text_reason_keys + intent_reason_keys + model_intent_reason_keys
-    local_warning_keys = [key for key in local_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
-    no_local_warnings = len(local_warning_keys) == 0
+    url_only_warning_keys = [key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
+    no_url_warnings = len(url_only_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
 
     age_status = "na"
@@ -973,7 +977,7 @@ def analyze():
         age_status = "pass" if age_days >= 180 else "fail"
 
     green_checks = [
-        {"key": "no_local_warnings", "status": "pass" if no_local_warnings else "fail"},
+        {"key": "no_local_warnings", "status": "pass" if no_url_warnings else "fail"},
         {"key": "vt_clean", "status": ("pass" if vt_clean else "fail") if vt_checked else "na"},
         {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
@@ -988,7 +992,7 @@ def analyze():
     # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
     vt_passes = (not vt_checked) or vt_clean
     urlscan_passes = (not urlscan_checked) or urlscan_clean
-    core_pass = no_local_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok
+    core_pass = no_url_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok
     if was_short_link:
         core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
