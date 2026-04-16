@@ -7,7 +7,7 @@ import ssl
 import socket
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, unquote
 
 import requests
 import whois
@@ -68,6 +68,23 @@ SUSPICIOUS_MESSAGE_TERMS = (
     "אימות",
     "החשבון הושעה"
 )
+BENIGN_INFO_ALLOWLIST = (
+    "לתשומת לבך",
+    "למידע נוסף",
+    "הודעה ללקוחות",
+    "עדכון שירות",
+    "שעות פעילות",
+    "השירות זמין",
+    "מבצע",
+    "הטבה",
+    "פתיחת חשבון",
+    "חשבון סטודנט",
+    "for your information",
+    "service update",
+    "working hours",
+    "promotion",
+    "new feature",
+)
 URL_REGEX = re.compile(r"(https?://[^\s]+|www\.[^\s]+)", re.IGNORECASE)
 CYRILLIC_OR_GREEK_CHARS = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
 I18N = {
@@ -96,18 +113,18 @@ I18N = {
         "ai_model_impersonation": "AI detected likely impersonation of a trusted organization.",
         "ai_model_sensitive_action": "AI detected request for sensitive user action.",
         "ai_model_unavailable": "AI semantic analysis is currently unavailable.",
-        "intel_configured": "Security data sources are connected: {sources}.",
-        "intel_missing": "Advanced security sources are not connected yet.",
-        "vt_malicious": "VirusTotal reports this link as malicious.",
-        "vt_suspicious": "VirusTotal reports suspicious detections for this link.",
-        "vt_clean": "VirusTotal did not report malicious detections for this link.",
-        "vt_pending": "VirusTotal scan started; results are still pending.",
-        "vt_unavailable": "VirusTotal could not be reached right now.",
-        "urlscan_malicious": "URLScan flagged this link as malicious.",
-        "urlscan_suspicious": "URLScan detected suspicious indicators for this link.",
-        "urlscan_clean": "URLScan did not find malicious indicators for this link.",
-        "urlscan_pending": "URLScan scan started; results are still pending.",
-        "urlscan_unavailable": "URLScan could not be reached right now.",
+        "intel_configured": "Advanced safety checks are connected: {sources}.",
+        "intel_missing": "Some advanced safety checks are not connected yet.",
+        "vt_malicious": "Global virus and threat databases marked this link as malicious.",
+        "vt_suspicious": "Global virus and threat databases found suspicious signs for this link.",
+        "vt_clean": "Global virus and threat databases did not report this link as malicious.",
+        "vt_pending": "A check in global threat databases has started and is still updating.",
+        "vt_unavailable": "Global threat database check is unavailable right now.",
+        "urlscan_malicious": "A global website scanning service marked this link as malicious.",
+        "urlscan_suspicious": "A global website scanning service found suspicious signs.",
+        "urlscan_clean": "A global website scanning service did not find malicious signs.",
+        "urlscan_pending": "A global website scanning service is still checking this link.",
+        "urlscan_unavailable": "Website scanning service is unavailable right now.",
         "short_link_expanded": "Shortened link was expanded to its real destination.",
         "short_link_unresolved": "Could not fully expand the shortened link destination.",
         "need_input": "Please enter a URL or full message text.",
@@ -145,18 +162,18 @@ I18N = {
         "ai_model_impersonation": "מנוע ה-AI זיהה חשד להתחזות לגורם אמין.",
         "ai_model_sensitive_action": "מנוע ה-AI זיהה בקשה לפעולה רגישה מצד המשתמש.",
         "ai_model_unavailable": "ניתוח סמנטי מבוסס AI אינו זמין כרגע.",
-        "intel_configured": "מקורות מידע אבטחתי מחוברים: {sources}.",
-        "intel_missing": "מקורות מידע אבטחתי מתקדמים עדיין לא מחוברים.",
-        "vt_malicious": "VirusTotal מדווח שהקישור זדוני.",
-        "vt_suspicious": "VirusTotal מדווח על אינדיקציות חשודות לקישור.",
-        "vt_clean": "VirusTotal לא מצא אינדיקציות זדוניות בקישור.",
-        "vt_pending": "נסרקה בקשה ל-VirusTotal, התוצאה עדיין מתעדכנת.",
-        "vt_unavailable": "לא ניתן היה להגיע ל-VirusTotal כרגע.",
-        "urlscan_malicious": "URLScan סימן את הקישור כזדוני.",
-        "urlscan_suspicious": "URLScan זיהה אינדיקציות חשודות בקישור.",
-        "urlscan_clean": "URLScan לא מצא אינדיקציות זדוניות בקישור.",
-        "urlscan_pending": "נסרקה בקשה ל-URLScan, התוצאה עדיין מתעדכנת.",
-        "urlscan_unavailable": "לא ניתן היה להגיע ל-URLScan כרגע.",
+        "intel_configured": "בדיקות בטיחות מתקדמות מחוברות: {sources}.",
+        "intel_missing": "חלק מבדיקות הבטיחות המתקדמות עדיין לא מחוברות.",
+        "vt_malicious": "בדיקה במאגרי וירוסים ואיומים עולמיים סימנה את הקישור כזדוני.",
+        "vt_suspicious": "בדיקה במאגרי וירוסים ואיומים עולמיים מצאה סימנים חשודים בקישור.",
+        "vt_clean": "בדיקה במאגרי וירוסים ואיומים עולמיים לא מצאה שהקישור זדוני.",
+        "vt_pending": "בדיקה במאגרי וירוסים ואיומים עולמיים התחילה ועדיין מתעדכנת.",
+        "vt_unavailable": "בדיקה במאגרי האיומים העולמיים אינה זמינה כרגע.",
+        "urlscan_malicious": "שירות עולמי לסריקת אתרים סימן את הקישור כזדוני.",
+        "urlscan_suspicious": "שירות עולמי לסריקת אתרים מצא סימנים חשודים בקישור.",
+        "urlscan_clean": "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
+        "urlscan_pending": "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
+        "urlscan_unavailable": "שירות סריקת האתרים אינו זמין כרגע.",
         "short_link_expanded": "לינק מקוצר נחשף ליעד האמיתי שלו.",
         "short_link_unresolved": "לא ניתן היה לחשוף במלואו את היעד של הלינק המקוצר.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
@@ -176,6 +193,10 @@ def t(language: str, key: str, **kwargs) -> str:
     lang = "he" if language == "he" else "en"
     template = I18N[lang][key]
     return template.format(**kwargs) if kwargs else template
+
+
+def count_term_hits(text: str, terms: tuple[str, ...] | list[str]) -> int:
+    return sum(1 for term in terms if term in text)
 
 
 def normalize_lookalike_text(value: str) -> str:
@@ -364,6 +385,24 @@ def normalize_url_for_checks(url: str) -> str:
     if "://" not in value:
         value = f"https://{value}"
     return value
+
+
+def decode_url_for_analysis(url: str) -> str:
+    """
+    Decode percent-encoded URL parts in a controlled manner before analysis.
+    We decode at most twice to handle nested encodings without going unbounded.
+    """
+    normalized = normalize_url_for_checks(url)
+    if not normalized:
+        return normalized
+
+    decoded = normalized
+    for _ in range(2):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    return decoded
 
 
 def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
@@ -562,8 +601,10 @@ def analyze_message_text(message: str) -> tuple[int, list[str]]:
         return score, reasons
 
     # Urgency and pressure wording is common in social engineering.
-    hit_count = sum(1 for term in SUSPICIOUS_MESSAGE_TERMS if term in text)
-    if hit_count:
+    hit_count = count_term_hits(text, SUSPICIOUS_MESSAGE_TERMS)
+    benign_hits = count_term_hits(text, BENIGN_INFO_ALLOWLIST)
+    has_hard_pressure = any(term in text for term in ("urgent", "immediately", "דחוף", "מייד", "מיידית"))
+    if hit_count and not (benign_hits > 0 and not has_hard_pressure):
         score += min(20, hit_count * 8)
         reasons.append("message_pressure")
 
@@ -601,9 +642,16 @@ def analyze_message_intent(message: str) -> tuple[int, list[str]]:
         "בנק", "חברת", "חברה", "מחלקת אבטחה", "צוות אבטחה", "תמיכה", "שירות לקוחות"
     ]
     sensitive_action_terms = [
-        "login", "verify", "confirm", "password", "payment", "card", "otp", "secure your account",
-        "התחבר", "אימות", "אשר", "סיסמה", "תשלום", "כרטיס", "קוד",
-        "חשבון", "חשבונך", "אבטח", "לאבטח", "אבטחה", "אשר את חשבונך"
+        "login", "log in", "verify", "verification", "confirm", "password",
+        "payment", "pay now", "card details", "credit card", "otp", "one-time code",
+        "secure your account", "update your details", "reset password",
+        "התחבר", "התחברות", "אימות", "אשר", "סיסמה", "תשלום", "שלם",
+        "פרטי כרטיס", "כרטיס אשראי", "קוד חד פעמי", "קוד אימות",
+        "עדכן פרטים", "אשר את חשבונך", "אבטח את חשבונך", "שחזור סיסמה"
+    ]
+    action_verbs = [
+        "click", "enter", "login", "log in", "verify", "confirm", "update", "pay", "submit",
+        "לחץ", "הזן", "הכנס", "התחבר", "אמת", "אשר", "עדכן", "שלם", "שלחו"
     ]
     threat_or_reward_terms = [
         "suspended", "blocked", "penalty", "fine", "won", "gift", "will be blocked", "account locked",
@@ -612,23 +660,31 @@ def analyze_message_intent(message: str) -> tuple[int, list[str]]:
 
     has_urgency = any(term in text for term in urgency_terms)
     has_authority = any(term in text for term in authority_terms)
-    has_sensitive_request = any(term in text for term in sensitive_action_terms)
+    has_sensitive_keyword = any(term in text for term in sensitive_action_terms)
+    has_action_verb = any(term in text for term in action_verbs)
+    has_sensitive_request = has_sensitive_keyword and has_action_verb
     has_threat_or_reward = any(term in text for term in threat_or_reward_terms)
     has_imperative_pattern = bool(
         re.search(r"(הכנס|לחץ|אשר|עדכן|התחבר).*(מייד|עכשיו|לאלתר|בהקדם)", text)
     )
+    benign_hits = count_term_hits(text, BENIGN_INFO_ALLOWLIST)
+    has_benign_info_context = benign_hits > 0
+
+    # Reduce false positives for official informational/marketing messages.
+    if has_benign_info_context and not (has_urgency or has_threat_or_reward or has_imperative_pattern):
+        return 0, []
 
     score = 0
     reasons: list[str] = []
 
     # Composite signals - the core of social engineering.
-    if has_urgency and has_sensitive_request:
+    if has_urgency and (has_sensitive_request or has_imperative_pattern):
         score += 20
         reasons.append("ai_social_engineering")
-    if has_authority and has_sensitive_request:
+    if has_authority and has_sensitive_request and (has_urgency or has_threat_or_reward or has_imperative_pattern):
         score += 20
         reasons.append("ai_authority_impersonation")
-    if has_sensitive_request:
+    if has_sensitive_request and (has_urgency or has_threat_or_reward or has_imperative_pattern):
         score += 10
         reasons.append("ai_sensitive_request")
     if has_threat_or_reward and (has_sensitive_request or has_urgency):
@@ -638,6 +694,13 @@ def analyze_message_intent(message: str) -> tuple[int, list[str]]:
         score += 15
         if "ai_social_engineering" not in reasons:
             reasons.append("ai_social_engineering")
+
+    # Allowlist is only a soft balancer: it can reduce weak signals, never override strong ones.
+    has_strong_attack_signal = has_threat_or_reward or has_imperative_pattern or (has_urgency and has_sensitive_request)
+    if benign_hits > 0 and not has_strong_attack_signal and score > 0:
+        score = max(0, score - min(15, benign_hits * 6))
+        if score == 0:
+            reasons = []
 
     return min(45, score), reasons
 
@@ -654,6 +717,11 @@ def analyze_message_intent_with_model(message: str, url: str) -> tuple[int, list
     schema_prompt = """
 You are a phishing detection assistant.
 Analyze the message and URL semantically.
+Important:
+- Official informational/marketing messages are NOT phishing by default.
+- Mark sensitive_action=true only when there is an explicit request to login, pay, verify, share credentials, or perform account-security action.
+- Mark impersonation=true only when there are clear signs the sender pretends to be another trusted entity.
+- If the message is informational and has no pressure/threat/urgent demand, keep all flags false.
 Return STRICT JSON only with these boolean keys:
 - social_engineering
 - impersonation
@@ -895,7 +963,9 @@ def analyze():
     submitted_url = raw_url or extracted_url
     normalized_submitted = normalize_url_for_checks(submitted_url)
     expanded_url, short_link_reason_keys, redirect_chain = expand_short_url(normalized_submitted)
-    url_to_check = expanded_url or normalized_submitted
+    expanded_or_submitted = expanded_url or normalized_submitted
+    decoded_url = decode_url_for_analysis(expanded_or_submitted)
+    url_to_check = decoded_url or expanded_or_submitted
     original_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
     was_short_link = any(
         original_host == d or original_host.endswith(f".{d}") for d in SHORTENER_DOMAINS
@@ -1044,7 +1114,8 @@ def analyze():
             "reasons": reasons,
             "explanation": build_explanation(language, risk_level, reason_keys, url_context),
             "intel_note": intel_note,
-            "analyzed_url": url_to_check
+            "analyzed_url": url_to_check,
+            "decoded_url": decoded_url
         }
     )
 

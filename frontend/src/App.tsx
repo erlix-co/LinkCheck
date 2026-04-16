@@ -26,6 +26,7 @@ type AnalysisResponse = {
   explanation?: string;
   intel_note?: string;
   analyzed_url?: string;
+  decoded_url?: string;
 };
 
 type Language = "en" | "he";
@@ -55,10 +56,11 @@ const translations = {
     urlInfoTitle: "Link details",
     originalUrl: "Short link",
     analyzedUrl: "Real destination",
+    decodedUrl: "Readable link after decoding",
     redirectChain: "Redirect path",
     mainDomain: "Main domain",
-    reasons: "What we found",
-    greenChecks: "Safety checks",
+    reasons: "What affected the result",
+    greenChecks: "Trust and safety checks",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -84,10 +86,11 @@ const translations = {
     urlInfoTitle: "פרטי הקישור",
     originalUrl: "קישור מקוצר",
     analyzedUrl: "היעד האמיתי",
+    decodedUrl: "הקישור אחרי פענוח",
     redirectChain: "מסלול הפניות",
     mainDomain: "דומיין ראשי",
-    reasons: "מה מצאנו",
-    greenChecks: "בדיקות אבטחה",
+    reasons: "מה השפיע על התוצאה",
+    greenChecks: "בדיקות אמון ובטיחות",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -102,85 +105,85 @@ const translations = {
 const reasonI18n = {
   en: {
     invalid_url: "The link format looks invalid.",
-    brand: "Looks like a known brand imitation.",
-    suspicious_words: "Contains words commonly used in phishing.",
-    lookalike_brand: "Domain name is almost identical to a known brand (one-character trick).",
-    at_sign_userinfo: "URL uses '@' to hide the real destination.",
-    case_confusable: "Domain mixes upper/lowercase to mislead.",
-    mixed_scripts: "Link mixes different alphabets (common phishing trick).",
-    unicode_lookalike: "Link uses lookalike Unicode characters.",
-    punycode: "Link uses encoded international domain format.",
-    suspicious_tld: "Uses a risky domain ending.",
-    long_url: "The link is unusually long.",
-    many_hyphens: "Too many dashes in the link.",
-    no_https: "The link is not secure (no HTTPS).",
-    message_pressure: "Message uses pressure/urgency language.",
-    message_short_link: "Short message with a link can be suspicious.",
-    message_aggressive: "Aggressive punctuation detected.",
-    ai_social_engineering: "Social engineering pattern detected in the message.",
-    ai_authority_impersonation: "Message appears to impersonate an official source.",
-    ai_sensitive_request: "Message asks for sensitive action (login/payment).",
-    ai_threat_or_reward: "Message uses threat or reward to push for action.",
-    ai_model_social_engineering: "AI detected social-engineering intent.",
-    ai_model_impersonation: "AI detected impersonation of a trusted source.",
-    ai_model_sensitive_action: "AI detected request for sensitive user action.",
-    ai_model_unavailable: "AI analysis temporarily unavailable.",
-    vt_malicious: "Flagged as malicious by VirusTotal.",
-    vt_suspicious: "Suspicious detections reported by VirusTotal.",
-    vt_clean: "Clean result from VirusTotal.",
-    vt_pending: "VirusTotal scan in progress.",
-    vt_unavailable: "VirusTotal unavailable right now.",
-    urlscan_malicious: "Flagged as malicious by URLScan.",
-    urlscan_suspicious: "Suspicious indicators found by URLScan.",
-    urlscan_clean: "Clean result from URLScan.",
-    urlscan_pending: "URLScan analysis in progress.",
-    urlscan_unavailable: "URLScan unavailable right now.",
-    short_link_expanded: "Shortened link expanded to real destination.",
-    short_link_unresolved: "Could not fully expand the shortened link.",
-    insufficient_trust_signals: "Not enough trust signals for a safe verdict.",
-    intel_configured: "Security data sources connected.",
-    intel_missing: "Advanced security sources not connected."
+    brand: "The link looks like it may be imitating a known brand.",
+    suspicious_words: "The link contains words often used in scam or phishing messages.",
+    lookalike_brand: "The site name looks very similar to a well-known brand or website.",
+    at_sign_userinfo: "The link uses a trick to hide the real destination.",
+    case_confusable: "The site name uses confusing letter shapes to mislead people.",
+    mixed_scripts: "The link mixes different alphabets, which is a common scam trick.",
+    unicode_lookalike: "The link uses characters that look normal but may be misleading.",
+    punycode: "The link uses an encoded domain format that can hide misleading characters.",
+    suspicious_tld: "The link uses a domain ending that is more commonly abused.",
+    long_url: "The link is unusually long, which can be used to hide suspicious parts.",
+    many_hyphens: "The link contains many dashes, which can be a warning sign.",
+    no_https: "The link is not protected with secure HTTPS.",
+    message_pressure: "The message tries to create pressure or urgency.",
+    message_short_link: "A very short message with a link can be suspicious.",
+    message_aggressive: "The message uses aggressive punctuation to push quick action.",
+    ai_social_engineering: "The message looks like it is trying to pressure the reader into acting quickly.",
+    ai_authority_impersonation: "The message may be pretending to come from an official company or service.",
+    ai_sensitive_request: "The message asks for a sensitive action like login, payment, or verification.",
+    ai_threat_or_reward: "The message uses fear or temptation to push action.",
+    ai_model_social_engineering: "AI found signs of manipulation or pressure in the message.",
+    ai_model_impersonation: "AI found signs that the message may be pretending to be from a trusted source.",
+    ai_model_sensitive_action: "AI found a request for a sensitive user action.",
+    ai_model_unavailable: "AI message analysis is temporarily unavailable.",
+    vt_malicious: "Global virus and threat databases marked this link as malicious.",
+    vt_suspicious: "Global virus and threat databases found suspicious signs for this link.",
+    vt_clean: "Global virus and threat databases did not report this link as malicious.",
+    vt_pending: "A check in global threat databases has started and is still updating.",
+    vt_unavailable: "Global threat database check is unavailable right now.",
+    urlscan_malicious: "A global website scanning service marked this link as malicious.",
+    urlscan_suspicious: "A global website scanning service found suspicious signs.",
+    urlscan_clean: "A global website scanning service did not find malicious signs.",
+    urlscan_pending: "A global website scanning service is still checking this link.",
+    urlscan_unavailable: "Website scanning service is unavailable right now.",
+    short_link_expanded: "The shortened link was opened to reveal its real destination.",
+    short_link_unresolved: "The shortened link could not be fully opened to its final destination.",
+    insufficient_trust_signals: "There were not enough trust signals to mark this link as safe.",
+    intel_configured: "Advanced security sources are connected.",
+    intel_missing: "Some advanced security sources are not connected yet."
   },
   he: {
     invalid_url: "פורמט הקישור לא תקין.",
-    brand: "נראה כמו חיקוי של מותג מוכר.",
-    suspicious_words: "מילים אופייניות לניסיונות פישינג.",
-    lookalike_brand: "שם הדומיין כמעט זהה למותג מוכר (שינוי של תו אחד).",
-    at_sign_userinfo: "הקישור משתמש ב-'@' כדי להסתיר את היעד האמיתי.",
-    case_confusable: "הדומיין מערב אותיות גדולות וקטנות כדי להטעות.",
-    mixed_scripts: "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
-    unicode_lookalike: "נמצאו תווים דומים לאותיות רגילות.",
-    punycode: "הקישור משתמש בקידוד דומיין בינלאומי.",
-    suspicious_tld: "סיומת דומיין חשודה.",
-    long_url: "הקישור ארוך בצורה חריגה.",
-    many_hyphens: "יותר מדי מקפים בקישור.",
-    no_https: "הקישור לא מאובטח.",
-    message_pressure: "ניסוח מלחיץ או דחוף בהודעה.",
-    message_short_link: "הודעה קצרה עם קישור יכולה להיות חשודה.",
-    message_aggressive: "סימני פיסוק אגרסיביים.",
-    ai_social_engineering: "זוהה דפוס הנדסה חברתית בהודעה.",
-    ai_authority_impersonation: "ההודעה מתחזה לגורם רשמי.",
-    ai_sensitive_request: "ההודעה מבקשת פעולה רגישה.",
-    ai_threat_or_reward: "ההודעה משתמשת באיום או פיתוי.",
-    ai_model_social_engineering: "מנוע AI זיהה כוונת הנדסה חברתית.",
-    ai_model_impersonation: "מנוע AI זיהה חשד להתחזות.",
-    ai_model_sensitive_action: "מנוע AI זיהה בקשה לפעולה רגישה.",
-    ai_model_unavailable: "ניתוח AI אינו זמין כרגע.",
-    vt_malicious: "סומן כזדוני על ידי VirusTotal.",
-    vt_suspicious: "זוהו אינדיקציות חשודות ב-VirusTotal.",
-    vt_clean: "VirusTotal לא מצא ממצאים.",
-    vt_pending: "סריקת VirusTotal בתהליך.",
-    vt_unavailable: "VirusTotal לא זמין כרגע.",
-    urlscan_malicious: "סומן כזדוני על ידי URLScan.",
-    urlscan_suspicious: "זוהו אינדיקציות חשודות ב-URLScan.",
-    urlscan_clean: "URLScan לא מצא ממצאים.",
-    urlscan_pending: "סריקת URLScan בתהליך.",
-    urlscan_unavailable: "URLScan לא זמין כרגע.",
-    short_link_expanded: "קישור מקוצר נחשף ליעד האמיתי.",
-    short_link_unresolved: "לא ניתן היה לחשוף את יעד הקישור המקוצר.",
-    insufficient_trust_signals: "אין מספיק אותות אמון לתוצאה בטוחה.",
-    intel_configured: "מקורות מידע אבטחתי מחוברים.",
-    intel_missing: "מקורות מידע אבטחתי מתקדמים לא מחוברים."
+    brand: "הקישור נראה כמו ניסיון לחקות מותג מוכר.",
+    suspicious_words: "בקישור יש מילים שמופיעות הרבה בהונאות ופישינג.",
+    lookalike_brand: "שם האתר דומה מאוד למותג או לאתר מוכר.",
+    at_sign_userinfo: "הקישור משתמש בטריק שמסתיר את היעד האמיתי.",
+    case_confusable: "שם האתר משתמש בצורת אותיות מבלבלת כדי להטעות.",
+    mixed_scripts: "הקישור מערב כמה סוגי אותיות, וזה טריק נפוץ בהונאות.",
+    unicode_lookalike: "בקישור יש תווים שנראים רגילים, אבל עלולים להטעות.",
+    punycode: "הקישור משתמש בפורמט מקודד שיכול להסתיר תווים מטעים.",
+    suspicious_tld: "סיומת הדומיין הזאת נפוצה יותר בקישורים בעייתיים.",
+    long_url: "הקישור ארוך מהרגיל, ולעיתים זה משמש להסתרת חלקים חשודים.",
+    many_hyphens: "יש הרבה מקפים בקישור, וזה יכול להיות סימן אזהרה.",
+    no_https: "הקישור אינו מוגן ב-HTTPS מאובטח.",
+    message_pressure: "בהודעה יש לחץ או דחיפות.",
+    message_short_link: "הודעה קצרה מאוד עם קישור יכולה להיות חשודה.",
+    message_aggressive: "בהודעה יש סימני פיסוק אגרסיביים שמנסים לדחוף לפעולה מהירה.",
+    ai_social_engineering: "נראה שההודעה מנסה להלחיץ את הקורא כדי שיפעל מהר.",
+    ai_authority_impersonation: "נראה שההודעה מנסה להיראות כאילו נשלחה מגוף רשמי או מוכר.",
+    ai_sensitive_request: "ההודעה מבקשת פעולה רגישה כמו התחברות, תשלום או אימות.",
+    ai_threat_or_reward: "ההודעה משתמשת באיום או בפיתוי כדי לגרום לפעולה.",
+    ai_model_social_engineering: "מנוע ה-AI מצא בהודעה סימנים ללחץ או מניפולציה.",
+    ai_model_impersonation: "מנוע ה-AI מצא סימנים לכך שההודעה אולי מתחזה לגורם אמין.",
+    ai_model_sensitive_action: "מנוע ה-AI מצא בקשה לפעולה רגישה מצד המשתמש.",
+    ai_model_unavailable: "בדיקת ה-AI של ההודעה אינה זמינה כרגע.",
+    vt_malicious: "בדיקה במאגרי וירוסים ואיומים עולמיים סימנה את הקישור כזדוני.",
+    vt_suspicious: "בדיקה במאגרי וירוסים ואיומים עולמיים מצאה סימנים חשודים בקישור.",
+    vt_clean: "בדיקה במאגרי וירוסים ואיומים עולמיים לא מצאה שהקישור זדוני.",
+    vt_pending: "בדיקה במאגרי וירוסים ואיומים עולמיים התחילה ועדיין מתעדכנת.",
+    vt_unavailable: "בדיקה במאגרי האיומים העולמיים אינה זמינה כרגע.",
+    urlscan_malicious: "שירות עולמי לסריקת אתרים סימן את הקישור כזדוני.",
+    urlscan_suspicious: "שירות עולמי לסריקת אתרים מצא סימנים חשודים בקישור.",
+    urlscan_clean: "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
+    urlscan_pending: "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
+    urlscan_unavailable: "שירות סריקת האתרים אינו זמין כרגע.",
+    short_link_expanded: "הקישור המקוצר נפתח ונחשף היעד האמיתי שלו.",
+    short_link_unresolved: "לא הצלחנו לפתוח את הקישור המקוצר עד ליעד הסופי שלו.",
+    insufficient_trust_signals: "לא היו מספיק סימני אמון כדי לסמן את הקישור כבטוח.",
+    intel_configured: "מקורות בדיקה מתקדמים מחוברים.",
+    intel_missing: "חלק ממקורות הבדיקה המתקדמים עדיין לא מחוברים."
   }
 } as const;
 
@@ -189,12 +192,12 @@ const reasonI18n = {
    ═══════════════════════════════════════ */
 
 const checkLabels: Record<string, Record<Language, string>> = {
-  no_local_warnings: { en: "No suspicious URL signals", he: "ללא סימני אזהרה בקישור" },
-  vt_clean: { en: "VirusTotal clean", he: "VirusTotal נקי" },
-  urlscan_clean: { en: "URLScan clean", he: "URLScan נקי" },
-  dns_resolves: { en: "DNS resolves", he: "DNS תקין" },
-  tls_valid: { en: "HTTPS certificate valid", he: "תעודת HTTPS תקינה" },
-  short_link_resolved: { en: "Short link resolved", he: "קישור מקוצר פוענח" },
+  no_local_warnings: { en: "Suspicious signs in the link itself", he: "סימנים חשודים בקישור עצמו" },
+  vt_clean: { en: "Check in global virus and threat databases", he: "בדיקה במאגרי וירוסים ואיומים עולמיים" },
+  urlscan_clean: { en: "Global website behavior scan", he: "סריקה עולמית של התנהגות האתר" },
+  dns_resolves: { en: "Website address is active on the internet", he: "כתובת האתר פעילה ברשת" },
+  tls_valid: { en: "Secure HTTPS certificate", he: "תעודת HTTPS מאובטחת ותקינה" },
+  short_link_resolved: { en: "Shortened link opened to real destination", he: "פתיחת הקישור המקוצר עד ליעד האמיתי" },
 };
 
 /* ═══════════════════════════════════════
@@ -231,7 +234,7 @@ export function App() {
 
   const getGreenCheckLabel = (check: GreenCheck): string => {
     if (check.key === "domain_age_180d") {
-      const base = language === "he" ? "גיל דומיין מעל 180 יום" : "Domain age over 180 days";
+      const base = language === "he" ? "ותק האתר מעל 180 יום" : "Website age over 180 days";
       return check.value != null ? `${base} (${check.value})` : base;
     }
     return checkLabels[check.key]?.[language] ?? check.key;
@@ -301,6 +304,7 @@ export function App() {
   const v = result ? riskVariant(result.risk_level) : null;
   const hasRedirect = result?.redirect_chain && result.redirect_chain.length > 1;
   const hasUrlDiff = result?.submitted_url && result.submitted_url !== result.analyzed_url;
+  const hasDecodedDiff = result?.decoded_url && result.decoded_url !== result.analyzed_url;
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
@@ -395,7 +399,7 @@ export function App() {
             </div>
 
             {/* URL info */}
-            {(hasUrlDiff || hasRedirect || (result.has_subdomains && result.registrable_domain)) && (
+            {(hasUrlDiff || hasDecodedDiff || hasRedirect || (result.has_subdomains && result.registrable_domain)) && (
               <div className="result-section">
                 <div className="result-section__title">{t.urlInfoTitle}</div>
 
@@ -410,6 +414,13 @@ export function App() {
                       <span className="url-row__value">{result.analyzed_url}</span>
                     </div>
                   </>
+                )}
+
+                {hasDecodedDiff && (
+                  <div className="url-row">
+                    <span className="url-row__label">{t.decodedUrl}</span>
+                    <span className="url-row__value">{result.decoded_url}</span>
+                  </div>
                 )}
 
                 {result.has_subdomains && result.registrable_domain && (
@@ -457,7 +468,7 @@ export function App() {
                   {result.green_checks.map((check) => (
                     <div className="check-row" key={check.key}>
                       <span className={`check-row__indicator check-row__indicator--${check.status}`}>
-                        {check.status === "pass" ? "\u2713" : check.status === "fail" ? "!" : "\u2013"}
+                        {check.status === "pass" ? "V" : check.status === "fail" ? "X" : "-"}
                       </span>
                       <span className="check-row__text">{getGreenCheckLabel(check)}</span>
                     </div>
