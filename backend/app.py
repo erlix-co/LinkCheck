@@ -343,12 +343,18 @@ def extract_first_url(text: str) -> str:
     if not text:
         return ""
     match = URL_REGEX.search(text)
-    if not match:
-        return ""
-    candidate = match.group(0).strip(".,);]")
-    if candidate.startswith("www."):
-        return f"https://{candidate}"
-    return candidate
+    if match:
+        candidate = match.group(0).strip(".,);]")
+        if candidate.startswith("www."):
+            return f"https://{candidate}"
+        return candidate
+    # Catch known shortener domains without protocol prefix (e.g. "bit.ly/abc")
+    for domain in SHORTENER_DOMAINS:
+        pattern = re.compile(rf"\b{re.escape(domain)}/\S+", re.IGNORECASE)
+        m = pattern.search(text)
+        if m:
+            return f"https://{m.group(0).strip('.,);]')}"
+    return ""
 
 
 def normalize_url_for_checks(url: str) -> str:
@@ -562,7 +568,10 @@ def analyze_message_text(message: str) -> tuple[int, list[str]]:
         reasons.append("message_pressure")
 
     # Very short message with link-only pattern is suspicious.
-    if len(text) < 35 and URL_REGEX.search(text):
+    has_link = bool(URL_REGEX.search(text)) or any(
+        re.search(rf"\b{re.escape(d)}/\S+", text, re.IGNORECASE) for d in SHORTENER_DOMAINS
+    )
+    if len(text) < 35 and has_link:
         score += 10
         reasons.append("message_short_link")
 
