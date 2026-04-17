@@ -23,6 +23,26 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 BRAND_PATTERNS = ("nike", "paypal", "benetton", "amazon")
 PROTECTED_BRANDS = ("bankisrael", "paypal", "amazon", "nike", "benetton")
+BRAND_CANONICAL_DOMAINS = {
+    "paypal": {"paypal.com"},
+    "amazon": {"amazon.com"},
+    "nike": {"nike.com"},
+    "benetton": {"benetton.com"},
+    "apple": {"apple.com"},
+    "google": {"google.com"},
+    "microsoft": {"microsoft.com"},
+    "facebook": {"facebook.com"},
+    "instagram": {"instagram.com"},
+    "whatsapp": {"whatsapp.com"},
+    "visa": {"visa.com"},
+    "mastercard": {"mastercard.com"},
+    "bankhapoalim": {"bankhapoalim.co.il"},
+    "leumi": {"leumi.co.il"},
+    "discount": {"discountbank.co.il"},
+    "mizrahi": {"mizrahi-tefahot.co.il"},
+    "mercantile": {"mercantile.co.il"},
+    "bankisrael": {"bankisrael.co.il"},
+}
 TRUSTED_TARGET_LABELS = (
     "bankisrael",
     "bankhapoalim",
@@ -73,6 +93,7 @@ SHORTENER_DOMAINS = (
 NON_WARNING_LOCAL_KEYS = {"short_link_expanded"}
 WEAK_LOCAL_WARNING_KEYS = {"brand", "suspicious_words", "long_url", "many_hyphens"}
 STRONG_LOCAL_WARNING_KEYS = {
+    "brand_mismatch",
     "lookalike_brand",
     "at_sign_userinfo",
     "case_confusable",
@@ -83,6 +104,58 @@ STRONG_LOCAL_WARNING_KEYS = {
     "no_https",
 }
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
+COMPOUND_IMPERSONATION_SUFFIXES = {
+    "security",
+    "secure",
+    "login",
+    "verify",
+    "account",
+    "update",
+    "auth",
+    "signin",
+    "payment",
+    "pay",
+    "wallet",
+    "banking",
+}
+ENTITY_LIKE_TOKENS = {
+    "bank",
+    "pay",
+    "payment",
+    "account",
+    "card",
+    "wallet",
+    "billing",
+    "invoice",
+    "auth",
+    "id",
+}
+ACTION_SECURITY_TOKENS = {
+    "login",
+    "signin",
+    "verify",
+    "verification",
+    "secure",
+    "security",
+    "update",
+    "confirm",
+    "reset",
+    "access",
+}
+GENERIC_NON_IDENTITY_TOKENS = {
+    "login",
+    "signin",
+    "verify",
+    "secure",
+    "security",
+    "update",
+    "account",
+    "auth",
+    "service",
+    "portal",
+    "online",
+    "web",
+}
 SUSPICIOUS_TLDS = (".xyz", ".top", ".click", ".site", ".store")
 SUSPICIOUS_MESSAGE_TERMS = (
     "urgent",
@@ -118,6 +191,7 @@ I18N = {
     "en": {
         "invalid_url": "The link format looks invalid.",
         "brand": "Looks like a known brand imitation.",
+        "brand_mismatch": "Brand name appears in the link, but the real domain ownership does not match that brand.",
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
         "at_sign_userinfo": "URL uses '@' to hide the real destination domain.",
@@ -167,6 +241,7 @@ I18N = {
     "he": {
         "invalid_url": "פורמט הקישור נראה לא תקין.",
         "brand": "נראה כמו התחזות למותג מוכר.",
+        "brand_mismatch": "שם מותג מופיע בקישור, אבל הדומיין האמיתי לא שייך למותג הזה.",
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
         "at_sign_userinfo": "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
@@ -224,6 +299,78 @@ def t(language: str, key: str, **kwargs) -> str:
 
 def count_term_hits(text: str, terms: tuple[str, ...] | list[str]) -> int:
     return sum(1 for term in terms if term in text)
+
+
+def detect_brand_token_in_hostname(hostname: str) -> str:
+    host = (hostname or "").lower()
+    labels = [label for label in host.split(".") if label]
+    for label in labels:
+        for token in BRAND_CANONICAL_DOMAINS:
+            if token in label:
+                return token
+    return ""
+
+
+def detect_brand_token_in_path(path: str) -> str:
+    path_value = (path or "").lower()
+    tokens = [token for token in re.split(r"[/\-_.]+", path_value) if token]
+    for token in tokens:
+        if token in BRAND_CANONICAL_DOMAINS:
+            return token
+    return ""
+
+
+def has_action_security_token_in_path(path: str) -> bool:
+    path_value = (path or "").lower()
+    tokens = [token for token in re.split(r"[/\-_.]+", path_value) if token]
+    return any(
+        token in ACTION_SECURITY_TOKENS or token in COMPOUND_IMPERSONATION_SUFFIXES
+        for token in tokens
+    )
+
+
+def detect_structural_identity_impersonation(hostname: str) -> str:
+    """
+    Generic structural detection (not example-specific):
+    identity-like token + security/action token inside registrable label.
+    Examples: bankaustria-security.com, paypal-login.net
+    """
+    host = (hostname or "").lower()
+    registrable_domain = get_registrable_domain(host)
+    if not registrable_domain or registrable_domain in TRUSTED_ROOT_DOMAINS:
+        return ""
+
+    primary_label = get_primary_label(host)
+    if "-" not in primary_label:
+        return ""
+
+    parts = [p for p in re.split(r"[-_.]+", primary_label) if p]
+    meaningful_parts = [p for p in parts if len(p) >= 2]
+    if len(meaningful_parts) < 2:
+        return ""
+
+    has_action_token = any(
+        part in ACTION_SECURITY_TOKENS or part in COMPOUND_IMPERSONATION_SUFFIXES
+        for part in meaningful_parts
+    )
+    has_entity_token = any(
+        part in ENTITY_LIKE_TOKENS
+        or part.startswith("bank")
+        or part.startswith("pay")
+        or part.startswith("auth")
+        for part in meaningful_parts
+    )
+
+    identity_candidate = meaningful_parts[0]
+    looks_like_identity = (
+        identity_candidate.isalnum()
+        and len(identity_candidate) >= 5
+        and identity_candidate not in GENERIC_NON_IDENTITY_TOKENS
+    )
+
+    if has_action_token and (has_entity_token or looks_like_identity):
+        return identity_candidate
+    return ""
 
 
 def normalize_lookalike_text(value: str) -> str:
@@ -519,13 +666,6 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
 
     lower_url = normalized_url.lower()
 
-    # Rule: brand-like words can indicate impersonation attempts.
-    brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
-    if brand_hit:
-        score += 20
-        reasons.append("brand")
-        context["brand_target"] = brand_hit
-
     # Rule: suspicious account/action words are common in phishing.
     if any(word in lower_url for word in SUSPICIOUS_WORDS):
         score += 15
@@ -534,6 +674,7 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     # Parse URL parts; add temporary https scheme if missing for robust parsing.
     parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
     hostname = (parsed.hostname or "").lower()
+    path_value = parsed.path or ""
     host_case_raw = extract_host_preserve_case(parsed)
     netloc_raw = parsed.netloc or ""
 
@@ -541,6 +682,47 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     if not hostname or "." not in hostname:
         reasons.append("invalid_url")
         return score, reasons, context
+
+    registrable_domain = get_registrable_domain(hostname)
+    brand_token = detect_brand_token_in_hostname(hostname)
+    if brand_token:
+        canonical_domains = BRAND_CANONICAL_DOMAINS.get(brand_token, set())
+        if canonical_domains and registrable_domain not in canonical_domains:
+            # Structural identity mismatch: brand-like host but wrong registrable owner domain.
+            score += 120
+            reasons.append("brand_mismatch")
+            context["brand_target"] = brand_token
+            context["brand_seen_domain"] = registrable_domain
+
+    # Brand token in path + action/security token on a different registrable domain
+    # is a strong impersonation indicator (e.g. google.com/paypal/login).
+    if "brand_mismatch" not in reasons:
+        path_brand_token = detect_brand_token_in_path(path_value)
+        if path_brand_token and has_action_security_token_in_path(path_value):
+            canonical_domains = BRAND_CANONICAL_DOMAINS.get(path_brand_token, set())
+            if canonical_domains and registrable_domain not in canonical_domains:
+                score += 110
+                reasons.append("brand_mismatch")
+                context["brand_target"] = path_brand_token
+                context["brand_seen_domain"] = registrable_domain
+
+    # Generic identity mismatch without brand whitelist:
+    # detects brand-like compound registrable labels such as <identity>-security.*
+    if "brand_mismatch" not in reasons:
+        structural_identity = detect_structural_identity_impersonation(hostname)
+        if structural_identity:
+            score += 110
+            reasons.append("brand_mismatch")
+            context["brand_target"] = structural_identity
+            context["brand_seen_domain"] = registrable_domain
+
+    # Rule: generic brand-like words can indicate impersonation attempts.
+    # Keep as supporting signal only when no structural mismatch already exists.
+    brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
+    if brand_hit and "brand_mismatch" not in reasons:
+        score += 20
+        reasons.append("brand")
+        context["brand_target"] = brand_hit
 
     # Rule: some top-level domains are frequently abused.
     if any(hostname.endswith(tld) for tld in SUSPICIOUS_TLDS):
@@ -940,6 +1122,46 @@ def tls_certificate_valid(hostname: str) -> bool:
         return False
 
 
+def page_http_status(url: str) -> int | None:
+    """
+    Check whether the specific page URL responds.
+    Returns HTTP status code when available, otherwise None.
+    """
+    if not url:
+        return None
+    normalized = normalize_url_for_checks(url)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        head_resp = requests.head(
+            normalized,
+            allow_redirects=True,
+            headers=headers,
+            timeout=8
+        )
+        if head_resp.status_code and head_resp.status_code != 405:
+            return int(head_resp.status_code)
+    except Exception:
+        pass
+
+    try:
+        get_resp = requests.get(
+            normalized,
+            allow_redirects=True,
+            headers=headers,
+            timeout=10,
+            stream=True
+        )
+        return int(get_resp.status_code)
+    except Exception:
+        return None
+
+
 def domain_age_days(hostname: str) -> int | None:
     try:
         data = whois.whois(hostname)
@@ -1059,8 +1281,12 @@ def analyze():
     else:
         total_score = min(100, url_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
+    brand_mismatch_hit = "brand_mismatch" in url_reason_keys
     if vt_malicious_hit:
         # Hard rule: if VirusTotal marks URL as malicious, force high severity.
+        total_score = max(total_score, 85)
+    if brand_mismatch_hit:
+        # Hard rule: structural identity mismatch is a strong phishing indicator.
         total_score = max(total_score, 85)
     reason_keys = (
         url_reason_keys
@@ -1077,6 +1303,16 @@ def analyze():
     has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
     dns_ok = dns_resolves(hostname) if hostname else False
     tls_ok = tls_certificate_valid(hostname) if hostname else False
+    page_status_code = page_http_status(url_to_check) if url_to_check else None
+    page_exists = False
+    page_status = "na"
+    if page_status_code is not None:
+        # Consider page reachable when it resolves to real content/redirect/auth challenge.
+        page_exists = (
+            (200 <= page_status_code < 400)
+            or page_status_code in {401, 403}
+        )
+        page_status = "pass" if page_exists else "fail"
     age_days = domain_age_days(hostname) if hostname else None
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
@@ -1098,6 +1334,7 @@ def analyze():
         {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
         {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
+        {"key": "page_available", "status": page_status, "value": page_status_code},
         {"key": "domain_age_180d", "status": age_status, "value": age_days},
     ]
     if was_short_link:
@@ -1108,7 +1345,8 @@ def analyze():
     # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
     vt_passes = (not vt_checked) or vt_clean
     urlscan_passes = (not urlscan_checked) or urlscan_clean
-    core_pass = no_url_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok
+    page_passes = (page_status_code is None) or page_exists
+    core_pass = no_url_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok and page_passes
     if was_short_link:
         core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
@@ -1144,6 +1382,8 @@ def analyze():
     else:
         risk_level = "High" if total_score > 60 else "Medium"
     if vt_malicious_hit:
+        risk_level = "High"
+    if brand_mismatch_hit:
         risk_level = "High"
 
     return jsonify(

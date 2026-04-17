@@ -109,6 +109,7 @@ const reasonI18n = {
   en: {
     invalid_url: "The link format looks invalid.",
     brand: "The link looks like it may be imitating a known brand.",
+    brand_mismatch: "Brand appears in the link, but the real domain does not belong to that brand.",
     suspicious_words: "The link contains words often used in scam or phishing messages.",
     lookalike_brand: "The site name looks very similar to a well-known brand or website.",
     at_sign_userinfo: "The link uses a trick to hide the real destination.",
@@ -150,6 +151,7 @@ const reasonI18n = {
   he: {
     invalid_url: "פורמט הקישור לא תקין.",
     brand: "הקישור נראה כמו ניסיון לחקות מותג מוכר.",
+    brand_mismatch: "שם מותג מופיע בקישור, אבל הדומיין האמיתי לא שייך למותג הזה.",
     suspicious_words: "בקישור יש מילים שמופיעות הרבה בהונאות ופישינג.",
     lookalike_brand: "שם האתר דומה מאוד למותג או לאתר מוכר.",
     at_sign_userinfo: "הקישור משתמש בטריק שמסתיר את היעד האמיתי.",
@@ -200,6 +202,7 @@ const checkLabels: Record<string, Record<Language, string>> = {
   urlscan_clean: { en: "Global website behavior scan", he: "סריקה עולמית של התנהגות האתר" },
   dns_resolves: { en: "Website address is active on the internet", he: "כתובת האתר פעילה ברשת" },
   tls_valid: { en: "Secure HTTPS certificate", he: "תעודת HTTPS מאובטחת ותקינה" },
+  page_available: { en: "The specific page exists and is reachable", he: "הדף הספציפי קיים ונגיש" },
   short_link_resolved: { en: "Shortened link opened to real destination", he: "פתיחת הקישור המקוצר עד ליעד האמיתי" },
 };
 
@@ -245,6 +248,10 @@ export function App() {
       const base = language === "he" ? "ותק האתר מעל 180 יום" : "Website age over 180 days";
       return check.value != null ? `${base} (${check.value})` : base;
     }
+    if (check.key === "page_available") {
+      const base = checkLabels[check.key]?.[language] ?? check.key;
+      return check.value != null ? `${base} (HTTP ${check.value})` : base;
+    }
     return checkLabels[check.key]?.[language] ?? check.key;
   };
 
@@ -260,14 +267,13 @@ export function App() {
             return `This is not ${target}. It is likely an imitation attempt!`;
           }
         }
-        if (key === "brand") {
+        if (key === "brand" || key === "brand_mismatch") {
           const target = (data.brand_target || "").trim();
           if (target) {
-            const trustedName = `${target}.com`;
             if (language === "he") {
-              return `הקישור אינו ${trustedName} אלא ניסיון חיקוי!`;
+              return `הקישור אינו ${target} אלא ניסיון חיקוי!`;
             }
-            return `This is not ${trustedName}. It is likely an imitation attempt!`;
+            return `This is not ${target}. It is likely an imitation attempt!`;
           }
         }
         return reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key;
