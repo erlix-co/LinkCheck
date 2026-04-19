@@ -5,11 +5,13 @@ import unicodedata
 import base64
 import ssl
 import socket
+import time
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urljoin, unquote
 
 import requests
+import tldextract
 import whois
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -20,6 +22,8 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 gemini_api_key = os.getenv("GEMINI_API_KEY")
+# Use bundled PSL snapshot for stable, offline-safe registrable extraction.
+psl_extract = tldextract.TLDExtract(suffix_list_urls=None)
 
 BRAND_PATTERNS = ("nike", "paypal", "benetton", "amazon")
 PROTECTED_BRANDS = ("bankisrael", "paypal", "amazon", "nike", "benetton")
@@ -29,8 +33,19 @@ BRAND_CANONICAL_DOMAINS = {
     "nike": {"nike.com"},
     "benetton": {"benetton.com"},
     "apple": {"apple.com"},
-    "google": {"google.com"},
-    "microsoft": {"microsoft.com"},
+    "google": {"google.com", "google.co.il"},
+    "microsoft": {
+        "microsoft.com",
+        "microsoftonline.com",
+        "live.com",
+        "outlook.com",
+        "office.com",
+        "office365.com",
+        "azure.com",
+        "skype.com",
+        "bing.com",
+        "msn.com",
+    },
     "facebook": {"facebook.com"},
     "instagram": {"instagram.com"},
     "whatsapp": {"whatsapp.com"},
@@ -43,6 +58,16 @@ BRAND_CANONICAL_DOMAINS = {
     "mercantile": {"mercantile.co.il"},
     "bankisrael": {"bankisrael.co.il"},
 }
+# Full hostname labels where a brand name appears as substring but the label is legitimate
+# (substring matching must not treat these as brand tokens — e.g. microsoft ≠ microsoftonline).
+LEGITIMATE_BRAND_COMPOUND_LABELS = frozenset({
+    "microsoftonline",
+    "googleusercontent",
+    "googleapis",
+    "gstatic",
+    "amazonaws",
+    "cloudfront",
+})
 TRUSTED_TARGET_LABELS = (
     "bankisrael",
     "bankhapoalim",
@@ -67,7 +92,14 @@ TRUSTED_ROOT_DOMAINS = {
     "amazon.com",
     "apple.com",
     "google.com",
+    "google.co.il",
     "microsoft.com",
+    "microsoftonline.com",
+    "live.com",
+    "outlook.com",
+    "office.com",
+    "office365.com",
+    "azure.com",
     "facebook.com",
     "instagram.com",
     "whatsapp.com",
@@ -217,6 +249,7 @@ I18N = {
         "intel_configured": "Advanced safety checks are connected: {sources}.",
         "intel_missing": "Some advanced safety checks are not connected yet.",
         "vt_malicious": "Global virus and threat databases marked this link as malicious.",
+        "vt_single_vendor_flag": "A single global threat engine flagged this link. Treat as weak signal and verify context.",
         "vt_suspicious": "Global virus and threat databases found suspicious signs for this link.",
         "vt_clean": "Global virus and threat databases did not report this link as malicious.",
         "vt_pending": "A check in global threat databases has started and is still updating.",
@@ -267,6 +300,7 @@ I18N = {
         "intel_configured": "בדיקות בטיחות מתקדמות מחוברות: {sources}.",
         "intel_missing": "חלק מבדיקות הבטיחות המתקדמות עדיין לא מחוברות.",
         "vt_malicious": "בדיקה במאגרי וירוסים ואיומים עולמיים סימנה את הקישור כזדוני.",
+        "vt_single_vendor_flag": "רק מנוע אחד סימן את הקישור כמסוכן.",
         "vt_suspicious": "בדיקה במאגרי וירוסים ואיומים עולמיים מצאה סימנים חשודים בקישור.",
         "vt_clean": "בדיקה במאגרי וירוסים ואיומים עולמיים לא מצאה שהקישור זדוני.",
         "vt_pending": "בדיקה במאגרי וירוסים ואיומים עולמיים התחילה ועדיין מתעדכנת.",
@@ -302,12 +336,37 @@ def count_term_hits(text: str, terms: tuple[str, ...] | list[str]) -> int:
 
 
 def detect_brand_token_in_hostname(hostname: str) -> str:
-    host = (hostname or "").lower()
-    labels = [label for label in host.split(".") if label]
+    """
+    Find brand keys in hostname labels using token/segment boundaries.
+    Avoids false positives where a brand name is a substring of a real label
+    (e.g. 'microsoft' inside 'microsoftonline' on login.microsoftonline.com).
+    """
+    registrable = get_registrable_domain(hostname)
+    registrable_label = get_primary_label(hostname)
+    if not registrable or not registrable_label:
+        return ""
+
+    labels = [registrable_label]
+    brand_keys = sorted(BRAND_CANONICAL_DOMAINS.keys(), key=len, reverse=True)
     for label in labels:
-        for token in BRAND_CANONICAL_DOMAINS:
-            if token in label:
-                return token
+        if label in LEGITIMATE_BRAND_COMPOUND_LABELS:
+            continue
+        segments = [s for s in re.split(r"[-_]+", label) if s]
+        for segment in segments:
+            if segment in LEGITIMATE_BRAND_COMPOUND_LABELS:
+                continue
+            if segment in BRAND_CANONICAL_DOMAINS:
+                return segment
+        if label in BRAND_CANONICAL_DOMAINS:
+            return label
+        for segment in segments:
+            if segment in LEGITIMATE_BRAND_COMPOUND_LABELS:
+                continue
+            for token in brand_keys:
+                if len(segment) <= len(token):
+                    continue
+                if segment.startswith(token) or segment.endswith(token):
+                    return token
     return ""
 
 
@@ -491,33 +550,64 @@ def find_lookalike_target(label_normalized: str) -> str:
 
 
 def get_primary_label(hostname: str) -> str:
-    """Get main domain label (handles normal and .co.il style domains)."""
-    host = hostname.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    parts = host.split(".")
-    if len(parts) < 2:
-        return host
-    # Handle common Israeli second-level domains: *.co.il, *.org.il, *.gov.il, etc.
-    il_second_level = {"ac", "co", "org", "gov", "net", "muni", "k12", "idf"}
-    if len(parts) >= 3 and parts[-1] == "il" and parts[-2] in il_second_level:
-        return parts[-3]
-    return parts[-2]
+    """Get registrable primary label using PSL extraction."""
+    host = (hostname or "").lower().strip(".")
+    if not host:
+        return ""
+    ext = psl_extract(host)
+    if ext.domain:
+        return ext.domain.lower()
+    parts = [p for p in host.split(".") if p]
+    return parts[-1] if parts else ""
 
 
 def get_registrable_domain(hostname: str) -> str:
-    """Return the main registrable domain (e.g. verify-user.co, example.co.il)."""
+    """Return registrable domain (eTLD+1) using PSL-aware extraction."""
     host = (hostname or "").lower().strip(".")
-    if host.startswith("www."):
-        host = host[4:]
-    parts = host.split(".")
-    if len(parts) < 2:
-        return host
+    if not host:
+        return ""
+    ext = psl_extract(host)
+    if ext.domain and ext.suffix:
+        return f"{ext.domain.lower()}.{ext.suffix.lower()}"
+    return host
 
-    il_second_level = {"ac", "co", "org", "gov", "net", "muni", "k12", "idf"}
-    if len(parts) >= 3 and parts[-1] == "il" and parts[-2] in il_second_level:
-        return f"{parts[-3]}.{parts[-2]}.{parts[-1]}"
-    return f"{parts[-2]}.{parts[-1]}"
+
+def brand_key_for_canonical_domain(domain: str) -> str:
+    value = (domain or "").lower().strip(".")
+    if not value:
+        return ""
+    for brand_key, domains in BRAND_CANONICAL_DOMAINS.items():
+        if value in domains:
+            return brand_key
+    return ""
+
+
+def detect_embedded_trusted_root_in_subdomain(hostname: str, registrable_domain: str) -> str:
+    """
+    Detect impersonation via embedded trusted root domain inside the subdomain part.
+    Example: apple.com.verify-user.net (registrable: verify-user.net) embeds apple.com.
+
+    Returns the embedded trusted root domain when found, else empty string.
+    """
+    host = (hostname or "").lower().strip(".")
+    reg = (registrable_domain or "").lower().strip(".")
+    if not host or not reg:
+        return ""
+    if host == reg or not host.endswith(f".{reg}"):
+        return ""
+    subdomain_part = host[: -(len(reg) + 1)]  # remove ".<registrable>"
+    if not subdomain_part:
+        return ""
+    labels = [p for p in subdomain_part.split(".") if p]
+    if len(labels) < 2:
+        return ""
+    # Scan for any trusted root domain embedded as consecutive labels.
+    # Prefer longer matches first.
+    trusted = sorted(TRUSTED_ROOT_DOMAINS, key=len, reverse=True)
+    for candidate in trusted:
+        if subdomain_part == candidate or subdomain_part.endswith(f".{candidate}"):
+            return candidate
+    return ""
 
 
 def extract_host_preserve_case(parsed_url) -> str:
@@ -664,17 +754,14 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     if not normalized_url:
         return 0, reasons, context
 
-    lower_url = normalized_url.lower()
-
-    # Rule: suspicious account/action words are common in phishing.
-    if any(word in lower_url for word in SUSPICIOUS_WORDS):
-        score += 15
-        reasons.append("suspicious_words")
-
     # Parse URL parts; add temporary https scheme if missing for robust parsing.
     parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
+    lower_url = normalized_url.lower()
     hostname = (parsed.hostname or "").lower()
     path_value = parsed.path or ""
+    searchable_path = " ".join(
+        part for part in [parsed.path, parsed.params, parsed.query, parsed.fragment] if part
+    ).lower()
     host_case_raw = extract_host_preserve_case(parsed)
     netloc_raw = parsed.netloc or ""
 
@@ -684,10 +771,30 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         return score, reasons, context
 
     registrable_domain = get_registrable_domain(hostname)
+    registrable_label = get_primary_label(hostname)
+
+    # Strong phishing: embedded trusted root domain inside subdomain but registrable owner differs.
+    # Example: apple.com.verify-user.net embeds "apple.com" while registrable is verify-user.net.
+    embedded_trusted = detect_embedded_trusted_root_in_subdomain(hostname, registrable_domain)
+    if embedded_trusted:
+        score += 120
+        reasons.append("brand_mismatch")
+        brand_key = brand_key_for_canonical_domain(embedded_trusted) or get_primary_label(embedded_trusted)
+        if brand_key:
+            context["brand_target"] = brand_key
+        context["brand_seen_domain"] = registrable_domain
+
+    # Rule: suspicious account/action words are common in phishing URLs.
+    # Evaluate on URL path/query/fragment only, not subdomains.
+    if any(word in searchable_path for word in SUSPICIOUS_WORDS):
+        score += 15
+        reasons.append("suspicious_words")
+
     brand_token = detect_brand_token_in_hostname(hostname)
     if brand_token:
         canonical_domains = BRAND_CANONICAL_DOMAINS.get(brand_token, set())
-        if canonical_domains and registrable_domain not in canonical_domains:
+        exact_brand_label = registrable_label == brand_token
+        if canonical_domains and registrable_domain not in canonical_domains and not exact_brand_label:
             # Structural identity mismatch: brand-like host but wrong registrable owner domain.
             score += 120
             reasons.append("brand_mismatch")
@@ -716,13 +823,14 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
             context["brand_target"] = structural_identity
             context["brand_seen_domain"] = registrable_domain
 
-    # Rule: generic brand-like words can indicate impersonation attempts.
-    # Keep as supporting signal only when no structural mismatch already exists.
+    # Weak brand hint is allowed only when registrable owner label is different.
+    # This avoids false positives on legitimate country domains like amazon.de.
     brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
     if brand_hit and "brand_mismatch" not in reasons:
-        score += 20
-        reasons.append("brand")
-        context["brand_target"] = brand_hit
+        if registrable_label and registrable_label != brand_hit:
+            score += 20
+            reasons.append("brand")
+            context["brand_target"] = brand_hit
 
     # Rule: some top-level domains are frequently abused.
     if any(hostname.endswith(tld) for tld in SUSPICIOUS_TLDS):
@@ -1056,8 +1164,10 @@ def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
         malicious = int(stats.get("malicious", 0))
         suspicious = int(stats.get("suspicious", 0))
 
-        if malicious > 0:
+        if malicious >= 2:
             return min(60, 35 + malicious), ["vt_malicious"], intel_note_key
+        if malicious == 1:
+            return 12, ["vt_single_vendor_flag"], intel_note_key
         if suspicious > 0:
             return min(40, 20 + suspicious * 2), ["vt_suspicious"], intel_note_key
         return 0, ["vt_clean"], intel_note_key
@@ -1137,24 +1247,31 @@ def page_http_status(url: str) -> int | None:
             "Chrome/124.0.0.0 Safari/537.36"
         )
     }
+    deadline = time.monotonic() + 4.5
+
     try:
+        remaining = max(0.8, deadline - time.monotonic())
         head_resp = requests.head(
             normalized,
             allow_redirects=True,
             headers=headers,
-            timeout=8
+            timeout=min(2.5, remaining)
         )
         if head_resp.status_code and head_resp.status_code != 405:
             return int(head_resp.status_code)
     except Exception:
         pass
 
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+
     try:
         get_resp = requests.get(
             normalized,
             allow_redirects=True,
             headers=headers,
-            timeout=10,
+            timeout=max(1.0, min(3.0, remaining)),
             stream=True
         )
         return int(get_resp.status_code)
@@ -1301,19 +1418,31 @@ def analyze():
     registrable_domain = get_registrable_domain(hostname) if hostname else ""
     host_no_www = hostname[4:] if hostname.startswith("www.") else hostname
     has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
-    dns_ok = dns_resolves(hostname) if hostname else False
-    tls_ok = tls_certificate_valid(hostname) if hostname else False
-    page_status_code = page_http_status(url_to_check) if url_to_check else None
-    page_exists = False
-    page_status = "na"
-    if page_status_code is not None:
-        # Consider page reachable when it resolves to real content/redirect/auth challenge.
-        page_exists = (
-            (200 <= page_status_code < 400)
-            or page_status_code in {401, 403}
-        )
-        page_status = "pass" if page_exists else "fail"
-    age_days = domain_age_days(hostname) if hostname else None
+    # Performance guard: once a strong phishing hard-rule already fired, avoid slow
+    # network trust checks that cannot change final risk classification.
+    skip_expensive_trust_checks = brand_mismatch_hit or vt_malicious_hit
+
+    if skip_expensive_trust_checks:
+        dns_ok = False
+        tls_ok = False
+        page_status_code = None
+        page_exists = False
+        page_status = "na"
+        age_days = None
+    else:
+        dns_ok = dns_resolves(hostname) if hostname else False
+        tls_ok = tls_certificate_valid(hostname) if hostname else False
+        page_status_code = page_http_status(url_to_check) if url_to_check else None
+        page_exists = False
+        page_status = "na"
+        if page_status_code is not None:
+            # Consider page reachable when it resolves to real content/redirect/auth challenge.
+            page_exists = (
+                (200 <= page_status_code < 400)
+                or page_status_code in {401, 403}
+            )
+            page_status = "pass" if page_exists else "fail"
+        age_days = domain_age_days(hostname) if hostname else None
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
     vt_clean = not vt_configured or "vt_clean" in intel_reason_keys
