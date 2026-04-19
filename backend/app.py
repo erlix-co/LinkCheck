@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse, urljoin, unquote
 
 import requests
+import urllib3
 import tldextract
 import whois
 from flask import Flask, jsonify, request
@@ -195,8 +197,9 @@ SHORTENER_DOMAINS = (
     "buff.ly",
     "rebrand.ly",
     "shorturl.at",
+    "shorten.as",
 )
-NON_WARNING_LOCAL_KEYS = {"short_link_expanded"}
+NON_WARNING_LOCAL_KEYS = {"short_link_expanded", "short_link_destination_blocked"}
 WEAK_LOCAL_WARNING_KEYS = {"brand", "suspicious_words", "long_url", "many_hyphens"}
 STRONG_LOCAL_WARNING_KEYS = {
     "brand_mismatch",
@@ -344,8 +347,9 @@ I18N = {
         "urlscan_clean": "A global website scanning service did not find malicious signs.",
         "urlscan_pending": "A global website scanning service is still checking this link.",
         "urlscan_unavailable": "Website scanning service is unavailable right now.",
-        "short_link_expanded": "Shortened link was expanded to its real destination.",
-        "short_link_unresolved": "Could not fully expand the shortened link destination.",
+        "short_link_expanded": "HTTP redirects were followed to the final URL.",
+        "short_link_unresolved": "Could not follow the full redirect chain (error, loop, or blocked hop).",
+        "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
         "need_input": "Please enter a URL or full message text.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
@@ -395,8 +399,9 @@ I18N = {
         "urlscan_clean": "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
         "urlscan_pending": "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
         "urlscan_unavailable": "שירות סריקת האתרים אינו זמין כרגע.",
-        "short_link_expanded": "לינק מקוצר נחשף ליעד האמיתי שלו.",
-        "short_link_unresolved": "לא ניתן היה לחשוף במלואו את היעד של הלינק המקוצר.",
+        "short_link_expanded": "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
+        "short_link_unresolved": "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה, או צעד חסום).",
+        "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
@@ -784,9 +789,82 @@ def decode_url_for_analysis(url: str) -> str:
     return decoded
 
 
+def _safe_url_for_server_redirect(url: str) -> bool:
+    """
+    Reject URLs that must not be fetched server-side (SSRF / internal network).
+    Only http/https allowed; block localhost, private IPs, link-local, metadata.
+    """
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if p.scheme not in ("http", "https"):
+        return False
+    host = (p.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "metadata", "metadata.google.internal"):
+        return False
+    if host == "169.254.169.254":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return False
+    except ValueError:
+        pass
+    return True
+
+
+def _tls_verify_bundle() -> bool | str:
+    """Prefer Mozilla CA bundle via certifi (fixes many Windows/Python SSL issues)."""
+    try:
+        import certifi
+
+        return certifi.where()
+    except Exception:
+        return True
+
+
+def _redirect_session_get(session: requests.Session, url: str, *, headers: dict, timeout: int) -> requests.Response:
+    """
+    GET for redirect following. Retry without TLS verify if the server's chain fails
+    locally (common with some CDNs/shorteners). Set REDIRECT_FETCH_STRICT_SSL=1 to disable retry.
+    """
+    verify = _tls_verify_bundle()
+    try:
+        return session.get(url, allow_redirects=False, headers=headers, timeout=timeout, verify=verify)
+    except requests.exceptions.SSLError:
+        if os.getenv("REDIRECT_FETCH_STRICT_SSL", "").lower() in {"1", "true", "yes", "on"}:
+            raise
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return session.get(url, allow_redirects=False, headers=headers, timeout=timeout, verify=False)
+
+
+def _html_interstitial_or_block_page(r: requests.Response) -> bool:
+    """Detect ISP / DNS sinkhole / blocking HTML that is not a real final destination."""
+    if r.status_code != 200:
+        return False
+    ct = (r.headers.get("Content-Type") or "").lower()
+    if "text/html" not in ct:
+        return False
+    head = (r.text or "")[:20000].lower()
+    markers = (
+        "dns blocking",
+        "sinkhole",
+        "blocked page",
+        "a1 | dns blocking",
+        "interstitial",
+        "connection blocked",
+        "zugriff verweigert",
+    )
+    return any(m in head for m in markers)
+
+
 def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
     """
-    Expand known shortened links to their final destination.
+    Follow HTTP redirect hops (any shortener or generic site) to the final URL, then analyze that.
+    Uses hop-by-hop GET with allow_redirects=False so each Location can be validated (SSRF-safe).
     Returns (final_url, reason_keys, redirect_chain).
     """
     reason_keys: list[str] = []
@@ -795,10 +873,9 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
     if not normalized:
         return normalized, reason_keys, redirect_chain
 
-    parsed = urlparse(normalized)
-    hostname = (parsed.hostname or "").lower()
-    is_short_domain = any(hostname == d or hostname.endswith(f".{d}") for d in SHORTENER_DOMAINS)
-    if not is_short_domain:
+    if not _safe_url_for_server_redirect(normalized):
+        reason_keys.append("short_link_unresolved")
+        redirect_chain = [normalized]
         return normalized, reason_keys, redirect_chain
 
     headers = {
@@ -809,54 +886,51 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
         )
     }
     session = requests.Session()
+    current = normalized
+    redirect_chain = [current]
+    max_hops = 12
+    last_resp: requests.Response | None = None
 
-    # Strategy 1: HEAD with redirects (fast path)
-    try:
-        head_resp = session.head(normalized, allow_redirects=True, headers=headers, timeout=8)
-        head_chain = [r.url for r in head_resp.history] + [head_resp.url]
-        if head_chain:
-            redirect_chain = head_chain
-        if head_resp.url and head_resp.url != normalized:
-            reason_keys.append("short_link_expanded")
-            return head_resp.url, reason_keys, redirect_chain
-    except Exception:
-        pass
+    for _ in range(max_hops):
+        try:
+            r = _redirect_session_get(session, current, headers=headers, timeout=12)
+        except Exception:
+            if len(redirect_chain) > 1:
+                reason_keys.append("short_link_unresolved")
+            return current, reason_keys, redirect_chain
 
-    # Strategy 2: GET with redirects (some providers ignore HEAD)
-    try:
-        get_resp = session.get(normalized, allow_redirects=True, headers=headers, timeout=10)
-        get_chain = [r.url for r in get_resp.history] + [get_resp.url]
-        if get_chain:
-            redirect_chain = get_chain
-        if get_resp.url and get_resp.url != normalized:
-            reason_keys.append("short_link_expanded")
-            return get_resp.url, reason_keys, redirect_chain
-    except Exception:
-        pass
+        last_resp = r
 
-    # Strategy 3: manual hop-by-hop follow of Location headers
-    try:
-        current = normalized
-        manual_chain = [current]
-        for _ in range(8):
-            hop = session.get(current, allow_redirects=False, headers=headers, timeout=8)
-            location = hop.headers.get("Location")
-            if not location:
-                break
-            next_url = urljoin(current, location)
-            manual_chain.append(next_url)
-            current = next_url
-        if len(manual_chain) > 1:
-            redirect_chain = manual_chain
-            reason_keys.append("short_link_expanded")
-            return manual_chain[-1], reason_keys, redirect_chain
-    except Exception:
-        pass
+        if r.status_code in (301, 302, 303, 307, 308):
+            loc = r.headers.get("Location")
+            if not loc:
+                reason_keys.append("short_link_unresolved")
+                return current, reason_keys, redirect_chain
+            next_u = urljoin(current, loc.strip())
+            if not _safe_url_for_server_redirect(next_u):
+                reason_keys.append("short_link_unresolved")
+                return current, reason_keys, redirect_chain
+            if next_u in redirect_chain:
+                reason_keys.append("short_link_unresolved")
+                return current, reason_keys, redirect_chain
+            redirect_chain.append(next_u)
+            current = next_u
+            continue
 
-    reason_keys.append("short_link_unresolved")
-    if not redirect_chain:
-        redirect_chain = [normalized]
-    return normalized, reason_keys, redirect_chain
+        break
+
+    final = current
+    # Passthrough hop returned HTML block page (e.g. ISP sinkhole) — not a real destination,
+    # but HTTP redirect following did complete; analysis falls back to the submitted URL.
+    if last_resp is not None and _html_interstitial_or_block_page(last_resp):
+        reason_keys.append("short_link_expanded")
+        reason_keys.append("short_link_destination_blocked")
+        final = normalized
+        return final, reason_keys, redirect_chain
+
+    if len(redirect_chain) > 1:
+        reason_keys.append("short_link_expanded")
+    return final, reason_keys, redirect_chain
 
 
 def analyze_url(url: str) -> tuple[int, list[str], dict]:
@@ -1469,9 +1543,14 @@ def analyze():
     decoded_url = decode_url_for_analysis(expanded_or_submitted)
     url_to_check = decoded_url or expanded_or_submitted
     original_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
-    was_short_link = any(
-        original_host == d or original_host.endswith(f".{d}") for d in SHORTENER_DOMAINS
-    ) if original_host else False
+    # Show redirect / short-link trust row when we followed hops OR domain is a known shortener list.
+    was_short_link = bool(normalized_submitted) and (
+        len(redirect_chain) > 1
+        or (
+            original_host
+            and any(original_host == d or original_host.endswith(f".{d}") for d in SHORTENER_DOMAINS)
+        )
+    )
     short_link_resolved = "short_link_expanded" in short_link_reason_keys
 
     if not url_to_check and not message:

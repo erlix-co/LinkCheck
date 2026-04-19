@@ -2,6 +2,7 @@ Flask
 flask-cors
 Flask-Limiter>=3.8.0
 requests
+certifi>=2024.0.0
 python-dotenv
 python-whois
 tldextract

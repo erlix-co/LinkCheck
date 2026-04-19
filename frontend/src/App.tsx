@@ -206,8 +206,9 @@ const reasonI18n = {
     urlscan_clean: "A global website scanning service did not find malicious signs.",
     urlscan_pending: "A global website scanning service is still checking this link.",
     urlscan_unavailable: "Website scanning service is unavailable right now.",
-    short_link_expanded: "The shortened link was opened to reveal its real destination.",
-    short_link_unresolved: "The shortened link could not be fully opened to its final destination.",
+    short_link_expanded: "HTTP redirects were followed to the final URL.",
+    short_link_unresolved: "The full redirect chain could not be followed (error, loop, or blocked hop).",
+    short_link_destination_blocked: "Redirects ended on a provider block or interstitial page; analysis uses the link you submitted.",
     insufficient_trust_signals: "There were not enough trust signals to mark this link as safe.",
     intel_configured: "Advanced security sources are connected.",
     intel_missing: "Some advanced security sources are not connected yet."
@@ -249,8 +250,9 @@ const reasonI18n = {
     urlscan_clean: "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
     urlscan_pending: "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
     urlscan_unavailable: "שירות סריקת האתרים אינו זמין כרגע.",
-    short_link_expanded: "הקישור המקוצר נפתח ונחשף היעד האמיתי שלו.",
-    short_link_unresolved: "לא הצלחנו לפתוח את הקישור המקוצר עד ליעד הסופי שלו.",
+    short_link_expanded: "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
+    short_link_unresolved: "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה או צעד חסום).",
+    short_link_destination_blocked: "ההפניות הסתיימו בדף חסימה או ביניים של ספק; הניתוח מבוסס על הקישור שהזנת.",
     insufficient_trust_signals: "לא היו מספיק סימני אמון כדי לסמן את הקישור כבטוח.",
     intel_configured: "מקורות בדיקה מתקדמים מחוברים.",
     intel_missing: "חלק ממקורות הבדיקה המתקדמים עדיין לא מחוברים."
@@ -268,7 +270,10 @@ const checkLabels: Record<string, Record<Language, string>> = {
   dns_resolves: { en: "Website address is active on the internet", he: "כתובת האתר פעילה ברשת" },
   tls_valid: { en: "Secure HTTPS certificate", he: "תעודת HTTPS מאובטחת ותקינה" },
   page_available: { en: "The specific page exists and is reachable", he: "הדף הספציפי קיים ונגיש" },
-  short_link_resolved: { en: "Shortened link opened to real destination", he: "פתיחת הקישור המקוצר עד ליעד האמיתי" },
+  short_link_resolved: {
+    en: "Redirect chain resolved to final URL",
+    he: "מעקב אחרי הפניות עד ליעד הסופי",
+  },
 };
 
 /* ═══════════════════════════════════════
@@ -351,8 +356,13 @@ export function App() {
   };
 
   const getReasonIcon = (key: string): string => {
-    if (key.startsWith("vt_clean") || key.startsWith("urlscan_clean") || key === "short_link_expanded")
+    if (
+      key.startsWith("vt_clean") ||
+      key.startsWith("urlscan_clean") ||
+      key === "short_link_expanded"
+    )
       return "\u2705";
+    if (key === "short_link_destination_blocked") return "\u26A0\uFE0F";
     if (key.startsWith("vt_") || key.startsWith("urlscan_") || key.includes("malicious"))
       return "\u{1F6A8}";
     if (key.includes("ai_model") || key.includes("ai_social") || key.includes("ai_authority") || key.includes("ai_sensitive") || key.includes("ai_threat"))
