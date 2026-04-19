@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { CONTACT_EMAIL } from "./data/termsOfUse";
+import { FooterLegal, ReportIssueModal, TermsInline, TermsModal } from "./TermsUi";
 
 /* ═══════════════════════════════════════
    TYPES
@@ -41,6 +43,9 @@ type Language = "en" | "he";
 const translations = {
   en: {
     subtitle: "Got a suspicious link or message? Paste it here and we'll check it for you.",
+    betaBadge: "Beta",
+    betaNotice:
+      "Experimental version — results are estimates only and are not guaranteed. Do not rely on this tool as your only protection.",
     messageLabel: "Message text",
     messagePlaceholder: "Paste the SMS or email you received here...",
     urlLabel: "Or just the link",
@@ -67,10 +72,41 @@ const translations = {
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
-    footer: "Powered by Erlix"
+    footer: "Powered by Erlix",
+    footerTerms: "Terms of use",
+    footerContact: "Contact",
+    footerReport: "Report an issue",
+    termsRequired: "Please accept the Terms of Use to run a check.",
+    contactLine: `Contact: ${CONTACT_EMAIL}`,
+    reportTitle: "Report an issue",
+    reportContextTitle: "Included with your report (from this page):",
+    reportContextEmpty: "No link or message in the scan fields — your description below is still sent.",
+    reportContextUrlLabel: "Link",
+    reportContextMessageLabel: "Message",
+    reportIncludeInReport: "Include in report",
+    reportExcludedFromReport: "Not included in this report.",
+    reportIntro: "Describe what happened and send your report from this page.",
+    reportViaEmailOnly: "Report via email only",
+    reportViaEmailOnlyHint:
+      "Opens your mail app with this page’s URL and message — you write there.",
+    reportFormSection: "Your report:",
+    reportLabel: "What went wrong?",
+    reportPlaceholder: "e.g. wrong risk level, slow response, error message…",
+    reportSend: "Send report",
+    reportSending: "Sending…",
+    reportSuccess: "Report sent. Thank you.",
+    reportSuccessViaMail:
+      "Email is not sent from our server. Tap below to open your mail app with the text you wrote, then send.",
+    reportFail: "Could not send. Try again later.",
+    reportUnavailable: "Reporting is not available right now. Please contact the site operator.",
+    reportOpenMail: "Open email app",
+    reportClose: "Close",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
+    betaBadge: "גרסת ניסוי",
+    betaNotice:
+      "גרסת ניסוי — התוצאות הן הערכה בלבד ואינן מובטחות. אל תסתמך על הכלי כהגנה יחידה.",
     messageLabel: "טקסט ההודעה",
     messagePlaceholder: "הדבק כאן את ההודעה שקיבלת...",
     urlLabel: "או רק את הקישור",
@@ -97,7 +133,34 @@ const translations = {
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
-    footer: "מופעל על ידי Erlix"
+    footer: "מופעל על ידי Erlix",
+    footerTerms: "תנאי שימוש",
+    footerContact: "יצירת קשר",
+    footerReport: "דיווח על תקלה",
+    termsRequired: "יש לאשר את תנאי השימוש לפני ביצוע בדיקה.",
+    contactLine: `יצירת קשר: ${CONTACT_EMAIL}`,
+    reportTitle: "דיווח על תקלה",
+    reportContextTitle: "יצורף לדיווח מהעמוד הזה:",
+    reportContextEmpty: "לא הוזנו קישור או הודעה בשדות למעלה — רק התיאור למטה יישלח.",
+    reportContextUrlLabel: "קישור",
+    reportContextMessageLabel: "טקסט ההודעה",
+    reportIncludeInReport: "לצרף לדיווח",
+    reportExcludedFromReport: "לא יצורף לדיווח הזה.",
+    reportIntro: "תאר את הבעיה ושלח את הדיווח מכאן.",
+    reportViaEmailOnly: "דיווח ישיר במייל",
+    reportViaEmailOnlyHint: "נפתח המייל עם הקשר מהדף — הכול נכתב באפליקציית המייל.",
+    reportFormSection: "תיאור הדיווח:",
+    reportLabel: "מה לא עבד?",
+    reportPlaceholder: "לדוגמה: רמת סיכון שגויה, האתר איטי, הופיעה שגיאה…",
+    reportSend: "שליחת דיווח",
+    reportSending: "שולח…",
+    reportSuccess: "הדיווח נשלח. תודה.",
+    reportSuccessViaMail:
+      "השליחה מהאתר לא זמינה. לחץ למטה לפתיחת המייל עם הטקסט שכתבת, ואז שלח.",
+    reportFail: "לא הצלחנו לשלוח. נסה שוב מאוחר יותר.",
+    reportUnavailable: "שליחת דיווח לא זמינה כרגע. פנה למפעיל האתר.",
+    reportOpenMail: "פתיחת המייל",
+    reportClose: "סגירה",
   }
 } as const;
 
@@ -231,6 +294,9 @@ export function App() {
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const t = translations[language];
 
   const riskVariant = (level: RiskLevel) =>
@@ -302,6 +368,11 @@ export function App() {
     setError("");
     setResult(null);
 
+    if (!termsAccepted) {
+      setError(t.termsRequired);
+      return;
+    }
+
     if (!trimmed && !trimmedMessage) {
       setError(t.needInput);
       return;
@@ -343,6 +414,39 @@ export function App() {
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
+      <TermsModal lang={language} open={showTermsModal} onClose={() => setShowTermsModal(false)} />
+      <ReportIssueModal
+        open={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        lang={language}
+        url={url}
+        message={message}
+        apiBaseUrl={apiBaseUrl}
+        labels={{
+          title: t.reportTitle,
+          intro: t.reportIntro,
+          contextTitle: t.reportContextTitle,
+          contextEmpty: t.reportContextEmpty,
+          contextUrlLabel: t.reportContextUrlLabel,
+          contextMessageLabel: t.reportContextMessageLabel,
+          includeInReport: t.reportIncludeInReport,
+          excludedFromReport: t.reportExcludedFromReport,
+          viaEmailOnly: t.reportViaEmailOnly,
+          viaEmailOnlyHint: t.reportViaEmailOnlyHint,
+          formSectionLabel: t.reportFormSection,
+          label: t.reportLabel,
+          placeholder: t.reportPlaceholder,
+          send: t.reportSend,
+          sending: t.reportSending,
+          success: t.reportSuccess,
+          successViaMail: t.reportSuccessViaMail,
+          fail: t.reportFail,
+          unavailable: t.reportUnavailable,
+          openMail: t.reportOpenMail,
+          close: t.reportClose,
+        }}
+      />
+
       {/* Language toggle */}
       <div className="lang-toggle">
         <button
@@ -359,6 +463,11 @@ export function App() {
         >
           עב
         </button>
+      </div>
+
+      <div className="beta-banner" role="status">
+        <span className="beta-banner__badge">{t.betaBadge}</span>
+        <p className="beta-banner__text">{t.betaNotice}</p>
       </div>
 
       {/* Header */}
@@ -400,10 +509,17 @@ export function App() {
           />
         </div>
 
-        <button type="button" className="scan-btn" onClick={onAnalyze} disabled={loading}>
+        <button type="button" className="scan-btn" onClick={onAnalyze} disabled={loading || !termsAccepted}>
           <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
           {loading ? t.scanning : t.scan}
         </button>
+
+        <TermsInline
+          lang={language}
+          accepted={termsAccepted}
+          onAcceptedChange={setTermsAccepted}
+          onOpenFull={() => setShowTermsModal(true)}
+        />
 
         {error && <p className="error-msg">{error}</p>}
 
@@ -520,6 +636,12 @@ export function App() {
 
       {/* Footer */}
       <footer className="footer">
+        <FooterLegal
+          onOpenTerms={() => setShowTermsModal(true)}
+          onReport={() => setShowReportModal(true)}
+          labels={{ terms: t.footerTerms, contact: t.footerContact, report: t.footerReport }}
+        />
+        <p className="footer__text">{t.contactLine}</p>
         <p className="footer__text">{t.footer}</p>
       </footer>
     </main>

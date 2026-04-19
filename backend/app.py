@@ -1,11 +1,14 @@
 import json
+import logging
 import os
 import re
+import smtplib
 import unicodedata
 import base64
 import ssl
 import socket
 import time
+from email.message import EmailMessage
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urljoin, unquote
@@ -15,13 +18,84 @@ import tldextract
 import whois
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger("linkcheck")
+
 app = Flask(__name__)
-CORS(app)
+# Limit JSON body size (mitigate DoS / oversized payloads). Override via MAX_CONTENT_LENGTH (bytes).
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_CONTENT_LENGTH", str(512 * 1024)))
+
+_cors_origins = (os.getenv("CORS_ORIGINS") or "*").strip()
+if _cors_origins == "*":
+    CORS(app)
+else:
+    _origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+    CORS(app, resources={r"/*": {"origins": _origins or ["http://localhost:5173"]}})
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[],
+    storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+)
+
+
+def _production_mode() -> bool:
+    return os.getenv("FLASK_ENV", "").lower() == "production" or os.getenv("APP_ENV", "").lower() == "production"
+
+
+@app.after_request
+def _security_headers(response):
+    """OWASP-aligned headers for every API response (see security policy / threat model)."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # JSON API: deny default loads; no frames.
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    if request.is_secure or os.getenv("FORCE_HSTS", "").lower() in {"1", "true", "yes", "on"}:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.errorhandler(413)
+def _payload_too_large(_e):
+    return jsonify({"ok": False, "error": "payload_too_large"}), 413
+
+
+@app.errorhandler(429)
+def _rate_limited(_e):
+    return jsonify({"ok": False, "error": "rate_limited"}), 429
+
+
+@app.errorhandler(500)
+def _internal_error(_e):
+    if _production_mode():
+        logger.exception("Internal server error")
+    return jsonify({"ok": False, "error": "internal_error"}), 500
+
+
+@app.get("/.well-known/security.txt")
+def security_txt():
+    """RFC 9116 security disclosure contact (threat modeling / disclosure policy)."""
+    contact = (os.getenv("SECURITY_CONTACT_EMAIL") or "erlix.co@gmail.com").strip()
+    body = (
+        f"Contact: mailto:{contact}\n"
+        "Preferred-Languages: en, he\n"
+        "Policy: LinkCheck follows coordinated disclosure; include repro steps if possible.\n"
+    )
+    return app.response_class(body, mimetype="text/plain; charset=utf-8")
 gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+# Input size caps for /analyze (DoS / abuse mitigation).
+MAX_ANALYZE_URL_LEN = int(os.getenv("MAX_ANALYZE_URL_LEN", "4096"))
+MAX_ANALYZE_MESSAGE_LEN = int(os.getenv("MAX_ANALYZE_MESSAGE_LEN", "100000"))
+
 # Use bundled PSL snapshot for stable, offline-safe registrable extraction.
 psl_extract = tldextract.TLDExtract(suffix_list_urls=None)
 
@@ -218,6 +292,17 @@ BENIGN_INFO_ALLOWLIST = (
     "new feature",
 )
 URL_REGEX = re.compile(r"(https?://[^\s]+|www\.[^\s]+)", re.IGNORECASE)
+# Domain-like token without scheme (e.g. evil-bank.online/path#frag) — must stay in sync with extraction logic.
+BARE_URL_IN_TEXT = re.compile(
+    r"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:/[^\s]*)?",
+    re.IGNORECASE,
+)
+# If there is no "/" path, reject host.lastlabel when lastlabel looks like a file extension, not a TLD.
+FAKE_FILE_TLDS = frozenset({
+    "txt", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar", "7z",
+    "exe", "msi", "dll", "bat", "csv", "xml", "json", "md", "log", "map",
+})
 CYRILLIC_OR_GREEK_CHARS = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
 I18N = {
     "en": {
@@ -623,6 +708,33 @@ def extract_host_preserve_case(parsed_url) -> str:
     return netloc.strip("[]")
 
 
+def _bare_url_candidate_ok(raw: str) -> bool:
+    """Filter false positives (e.g. report.pdf) for bare domain matches."""
+    s = raw.strip(".,);]").strip()
+    if not s:
+        return False
+    hostport = s.split("/", 1)[0]
+    host = hostport.split(":", 1)[0]
+    # Skip IPv4-looking hosts (avoid matching 1.2.3.4 as a domain)
+    parts = host.split(".")
+    if len(parts) >= 2 and all(p.isdigit() for p in parts):
+        return False
+    if "/" not in s:
+        labels = host.rsplit(".", 1)
+        if len(labels) == 2 and labels[-1].lower() in FAKE_FILE_TLDS:
+            return False
+    return True
+
+
+def _extract_bare_domain_url(text: str) -> str:
+    """First domain[/path] without scheme (e.g. finanz.example.online/path#x)."""
+    for m in BARE_URL_IN_TEXT.finditer(text):
+        cand = m.group(0)
+        if _bare_url_candidate_ok(cand):
+            return cand.strip(".,);]")
+    return ""
+
+
 def extract_first_url(text: str) -> str:
     """Extract first URL from text if present."""
     if not text:
@@ -639,6 +751,9 @@ def extract_first_url(text: str) -> str:
         m = pattern.search(text)
         if m:
             return f"https://{m.group(0).strip('.,);]')}"
+    bare = _extract_bare_domain_url(text)
+    if bare:
+        return f"https://{bare}"
     return ""
 
 
@@ -928,8 +1043,12 @@ def analyze_message_text(message: str) -> tuple[int, list[str]]:
         reasons.append("message_pressure")
 
     # Very short message with link-only pattern is suspicious.
-    has_link = bool(URL_REGEX.search(text)) or any(
-        re.search(rf"\b{re.escape(d)}/\S+", text, re.IGNORECASE) for d in SHORTENER_DOMAINS
+    has_link = (
+        bool(URL_REGEX.search(text))
+        or bool(_extract_bare_domain_url(text))
+        or any(
+            re.search(rf"\b{re.escape(d)}/\S+", text, re.IGNORECASE) for d in SHORTENER_DOMAINS
+        )
     )
     if len(text) < 35 and has_link:
         score += 10
@@ -1320,11 +1439,26 @@ def build_explanation(language: str, risk_level: str, reason_keys: list[str], co
 
 
 @app.post("/analyze")
+@limiter.limit("60 per minute")
 def analyze():
     payload = request.get_json(silent=True) or {}
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
+
+    if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "payload_too_large",
+                    "score": 0,
+                    "risk_level": "Low",
+                    "reasons": [],
+                }
+            ),
+            413,
+        )
 
     # If user provided full message, extract URL automatically.
     extracted_url = extract_first_url(message)
@@ -1536,6 +1670,221 @@ def analyze():
             "brand_target": url_context.get("brand_target", ""),
         }
     )
+
+
+def _smtp_configured() -> bool:
+    return bool(os.getenv("SMTP_HOST", "").strip() and os.getenv("SMTP_USER", "").strip() and os.getenv("SMTP_PASSWORD", "").strip())
+
+
+def _report_store_path() -> str | None:
+    p = (os.getenv("REPORT_STORE_PATH") or "").strip()
+    return p or None
+
+
+def _resolved_report_store_path() -> str | None:
+    """Resolve REPORT_STORE_PATH relative to this file's directory (stable regardless of cwd)."""
+    raw = _report_store_path()
+    if not raw:
+        return None
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(backend_dir, raw))
+
+
+def _file_store_configured() -> bool:
+    return _report_store_path() is not None
+
+
+def _format_checked_scan_context(url_field: str, message_field: str) -> str:
+    """Human-readable block of URL and/or message the user had in the scan form (if any)."""
+    u = (url_field or "").strip()
+    m = (message_field or "").strip()
+    parts: list[str] = []
+    if u:
+        parts.append(f"[URL checked]\n{u}")
+    if m:
+        parts.append(f"[Message checked]\n{m}")
+    return "\n\n".join(parts)
+
+
+def _report_site_only_ui() -> bool:
+    return os.getenv("REPORT_SITE_ONLY", "").lower() in {"1", "true", "yes", "on"}
+
+
+def append_issue_report_to_file(
+    *,
+    description: str,
+    url_field: str,
+    message_field: str,
+    language: str,
+    user_agent: str,
+    client_ip: str,
+) -> None:
+    """Append one JSON object per line to REPORT_STORE_PATH (UTF-8)."""
+    abs_path = _resolved_report_store_path()
+    if not abs_path:
+        raise RuntimeError("REPORT_STORE_PATH not set")
+    parent = os.path.dirname(abs_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    ctx = _format_checked_scan_context(url_field, message_field)
+    u_stripped = (url_field or "").strip()
+    m_stripped = (message_field or "").strip()
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "language": language,
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+        "checked_url": u_stripped or None,
+        "checked_message": m_stripped or None,
+        "checked_context_text": ctx or None,
+        "url_field": url_field,
+        "message_field": message_field,
+        "description": description,
+    }
+    with open(abs_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _report_delivery_configured() -> bool:
+    return _smtp_configured() or _file_store_configured()
+
+
+def send_issue_report_email(
+    *,
+    description: str,
+    url_field: str,
+    message_field: str,
+    language: str,
+    user_agent: str,
+    client_ip: str,
+) -> None:
+    """Send plain-text report email via SMTP (requires SMTP_* env vars)."""
+    host = os.getenv("SMTP_HOST", "").strip()
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
+    mail_from = os.getenv("REPORT_FROM_EMAIL", user).strip()
+    mail_to = os.getenv("REPORT_TO_EMAIL", "erlix.co@gmail.com").strip()
+
+    ctx = _format_checked_scan_context(url_field, message_field)
+    ctx_block = (
+        f"From scan (auto):\n{ctx}\n\n"
+        if ctx
+        else f"URL field:\n{url_field or '(empty)'}\n\nMessage field:\n{message_field or '(empty)'}\n\n"
+    )
+    body = (
+        "LinkCheck — issue report\n"
+        "────────────────────────\n"
+        f"Language: {language}\n"
+        f"Client IP: {client_ip}\n"
+        f"User-Agent: {user_agent}\n\n"
+        f"{ctx_block}"
+        f"Description:\n{description}\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = "LinkCheck — issue report"
+    msg["From"] = mail_from
+    msg["To"] = mail_to
+    msg.set_content(body, charset="utf-8")
+
+    with smtplib.SMTP(host, port, timeout=15) as smtp:
+        if use_tls:
+            smtp.starttls(context=ssl.create_default_context())
+        smtp.login(user, password)
+        smtp.send_message(msg)
+
+
+@app.get("/report/config")
+@limiter.limit("120 per minute")
+def report_config():
+    """Tell the UI whether site reports work and whether mailto shortcuts should show."""
+    smtp = _smtp_configured()
+    file_store = _file_store_configured()
+    accepts = _report_delivery_configured()
+    site_only = _report_site_only_ui()
+    # Hide mailto when operator chose site-only, or when file store alone handles delivery (no SMTP).
+    show_mailto = not site_only and not (file_store and not smtp)
+    return jsonify(
+        {
+            "accepts_site_reports": accepts,
+            "show_mailto": show_mailto,
+            "smtp": smtp,
+            "file_store": file_store,
+        }
+    )
+
+
+@app.post("/report")
+@limiter.limit("12 per 5 minutes")
+def report_issue():
+    """Receive bug/issue reports: SMTP and/or append to REPORT_STORE_PATH (JSON lines)."""
+    if not _report_delivery_configured():
+        mailto_fb = not _report_site_only_ui()
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "report_delivery_not_configured",
+                    "mailto_fallback": mailto_fb,
+                }
+            ),
+            503,
+        )
+
+    payload = request.get_json(silent=True) or {}
+    description = (payload.get("description") or "").strip()
+    if len(description) < 5:
+        return jsonify({"ok": False, "error": "description_too_short"}), 400
+    if len(description) > 8000:
+        return jsonify({"ok": False, "error": "description_too_long"}), 400
+
+    url_field = (payload.get("url_field") or "")[:4000]
+    message_field = (payload.get("message_field") or "")[:8000]
+    language = (payload.get("language") or "en")[:8]
+
+    user_agent = (request.headers.get("User-Agent") or "")[:2000]
+    client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200]
+
+    delivered = []
+
+    if _file_store_configured():
+        try:
+            append_issue_report_to_file(
+                description=description,
+                url_field=url_field,
+                message_field=message_field,
+                language=language,
+                user_agent=user_agent,
+                client_ip=client_ip,
+            )
+            delivered.append("file")
+        except Exception:
+            if not _smtp_configured():
+                return jsonify({"ok": False, "error": "store_failed"}), 502
+
+    if _smtp_configured():
+        try:
+            send_issue_report_email(
+                description=description,
+                url_field=url_field,
+                message_field=message_field,
+                language=language,
+                user_agent=user_agent,
+                client_ip=client_ip,
+            )
+            delivered.append("smtp")
+        except Exception:
+            if "file" not in delivered:
+                return jsonify({"ok": False, "error": "send_failed"}), 502
+
+    if not delivered:
+        return jsonify({"ok": False, "error": "send_failed"}), 502
+
+    return jsonify({"ok": True, "via": delivered})
 
 
 if __name__ == "__main__":

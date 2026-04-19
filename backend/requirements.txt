@@ -1,5 +1,6 @@
 Flask
 flask-cors
+Flask-Limiter>=3.8.0
 requests
 python-dotenv
 python-whois

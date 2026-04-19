@@ -14,8 +14,11 @@ yarn-error.log*
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+*.tsbuildinfo
 
-# Backend
+# Backend — never commit env, local DB files, or issue-report storage
+backend/data/*
+!backend/data/.gitkeep
 backend/.venv/
 backend/venv/
 backend/__pycache__/
@@ -30,6 +33,10 @@ backend/.env
 backend/.env.*
 frontend/.env
 frontend/.env.*
+
+# Keys / local secrets (if ever added)
+*.pem
+*.key
 
 # Coverage / test artifacts
 coverage/
