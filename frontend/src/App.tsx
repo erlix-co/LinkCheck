@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CONTACT_EMAIL } from "./data/termsOfUse";
 import { FooterLegal, ReportIssueModal, TermsInline, TermsModal } from "./TermsUi";
 import linkCheckLogo from "../Logo LinkCheck.png";
@@ -38,6 +38,22 @@ type AnalysisResponse = {
   page_audience?: string;
 };
 
+type LiveStep = {
+  key: string;
+  label: string;
+  status: "done" | "in_progress" | "pending";
+};
+
+type LiveMeta = {
+  analysis_id: string;
+  final: boolean;
+  stage: number;
+  progress: number;
+  risk_level: RiskLevel;
+  status_text: string;
+  steps: LiveStep[];
+};
+
 type Language = "en" | "he";
 
 /* ═══════════════════════════════════════
@@ -72,6 +88,7 @@ const translations = {
     redirectChain: "Redirect path",
     redirectPathToggle: "Show redirect path",
     mainDomain: "Main domain",
+    shownSubdomain: "Shown subdomain",
     siteLocation: "Website location",
     locationUnknown: "Unknown",
     reasons: "What affected the result",
@@ -108,6 +125,9 @@ const translations = {
     reportUnavailable: "Reporting is not available right now. Please contact the site operator.",
     reportOpenMail: "Open email app",
     reportClose: "Close",
+    liveStatus: "Results are updated in real time as more data is analyzed",
+    waitingExternal: "Waiting for external analysis...",
+    analysisSteps: "Analysis steps",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -136,6 +156,7 @@ const translations = {
     redirectChain: "מסלול הפניות",
     redirectPathToggle: "הצג מסלול הפניות",
     mainDomain: "דומיין ראשי",
+    shownSubdomain: "תת-הדומיין שמוצג",
     siteLocation: "האתר ממקום ב",
     locationUnknown: "לא ידוע",
     reasons: "מה השפיע על התוצאה",
@@ -171,6 +192,9 @@ const translations = {
     reportUnavailable: "שליחת דיווח לא זמינה כרגע. פנה למפעיל האתר.",
     reportOpenMail: "פתיחת המייל",
     reportClose: "סגירה",
+    liveStatus: "התוצאות מתעדכנות בזמן אמת ככל שנאסף מידע נוסף",
+    waitingExternal: "ממתינים לניתוח חיצוני...",
+    analysisSteps: "שלבי בדיקה",
   }
 } as const;
 
@@ -204,6 +228,7 @@ const reasonI18n = {
     ai_model_social_engineering: "AI found signs of manipulation or pressure in the message.",
     ai_model_impersonation: "AI found signs that the message may be pretending to be from a trusted source.",
     ai_model_sensitive_action: "AI found a request for a sensitive user action.",
+    ai_subdomain_impersonation_combo: "AI detected social-engineering pressure combined with a potentially misleading subdomain.",
     ai_model_unavailable: "AI message analysis is temporarily unavailable.",
     vt_malicious: "Global virus and threat databases marked this link as malicious.",
     vt_single_vendor_flag: "Only one threat engine flagged this link. This is a weak signal and should be reviewed in context.",
@@ -256,6 +281,7 @@ const reasonI18n = {
     ai_model_social_engineering: "מנוע ה-AI מצא בהודעה סימנים ללחץ או מניפולציה.",
     ai_model_impersonation: "מנוע ה-AI מצא סימנים לכך שההודעה אולי מתחזה לגורם אמין.",
     ai_model_sensitive_action: "מנוע ה-AI מצא בקשה לפעולה רגישה מצד המשתמש.",
+    ai_subdomain_impersonation_combo: "מנוע ה-AI זיהה לחץ/מניפולציה יחד עם תת-דומיין שעשוי להטעות.",
     ai_model_unavailable: "בדיקת ה-AI של ההודעה אינה זמינה כרגע.",
     vt_malicious: "בדיקה במאגרי וירוסים ואיומים עולמיים סימנה את הקישור כזדוני.",
     vt_single_vendor_flag: "רק מנוע אחד סימן את הקישור כמסוכן.",
@@ -291,6 +317,7 @@ const reasonI18n = {
 
 const checkLabels: Record<string, Record<Language, string>> = {
   no_local_warnings: { en: "Suspicious signs in the link itself", he: "סימנים חשודים בקישור עצמו" },
+  no_message_warnings: { en: "Suspicious signs in the message itself", he: "סימנים חשודים בהודעה עצמה" },
   vt_clean: { en: "Check in global virus and threat databases", he: "בדיקה במאגרי וירוסים ואיומים עולמיים" },
   urlscan_clean: { en: "Global website behavior scan", he: "סריקה עולמית של התנהגות האתר" },
   gsb_clean: { en: "Check in Google's Safe Browsing threat lists", he: "בדיקה במאגרי הגלישה הבטוחה של Google" },
@@ -324,11 +351,13 @@ export function App() {
   const [message, setMessage] = useState("");
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [liveMeta, setLiveMeta] = useState<LiveMeta | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const pollTokenRef = useRef(0);
   const t = translations[language];
 
   const riskVariant = (level: RiskLevel) =>
@@ -422,8 +451,11 @@ export function App() {
   const onAnalyze = async () => {
     const trimmed = url.trim();
     const trimmedMessage = message.trim();
+    pollTokenRef.current += 1;
+    const runToken = pollTokenRef.current;
     setError("");
     setResult(null);
+    setLiveMeta(null);
 
     if (!termsAccepted) {
       setError(t.termsRequired);
@@ -442,14 +474,73 @@ export function App() {
 
     setLoading(true);
     try {
+      const startResponse = await fetch(`${apiBaseUrl}/analyze/live/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+      });
+      if (startResponse.ok) {
+        const startData = await startResponse.json();
+        if (runToken !== pollTokenRef.current) return;
+        setLiveMeta({
+          analysis_id: startData.analysis_id || "",
+          final: Boolean(startData.final),
+          stage: Number(startData.stage || 1),
+          progress: Number(startData.progress || 0),
+          risk_level: (startData.risk_level || "Low") as RiskLevel,
+          status_text: startData.status_text || t.liveStatus,
+          steps: (startData.steps || []) as LiveStep[],
+        });
+        setResult((startData.result || null) as AnalysisResponse | null);
+        setLoading(false);
+
+        if (!startData.final && startData.analysis_id) {
+          for (let i = 0; i < 12; i += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 2300));
+            if (runToken !== pollTokenRef.current) return;
+            const statusResp = await fetch(`${apiBaseUrl}/analyze/live/status/${startData.analysis_id}`);
+            if (!statusResp.ok) break;
+            const statusData = await statusResp.json();
+            if (runToken !== pollTokenRef.current) return;
+            setLiveMeta({
+              analysis_id: statusData.analysis_id || "",
+              final: Boolean(statusData.final),
+              stage: Number(statusData.stage || 1),
+              progress: Number(statusData.progress || 0),
+              risk_level: (statusData.risk_level || "Low") as RiskLevel,
+              status_text: statusData.status_text || (statusData.final ? "Analysis completed." : t.waitingExternal),
+              steps: (statusData.steps || []) as LiveStep[],
+            });
+            setResult((statusData.result || null) as AnalysisResponse | null);
+            if (statusData.final) break;
+          }
+        }
+        return;
+      }
+
+      // Backward-compatible fallback to existing single-shot endpoint.
       const response = await fetch(`${apiBaseUrl}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
       });
-
       if (!response.ok) throw new Error(`Status ${response.status}`);
-      setResult(await response.json());
+      const legacy = await response.json();
+      if (runToken !== pollTokenRef.current) return;
+      setResult(legacy);
+      setLiveMeta({
+        analysis_id: "",
+        final: true,
+        stage: 3,
+        progress: 100,
+        risk_level: (legacy.risk_level || "Low") as RiskLevel,
+        status_text: "Analysis completed.",
+        steps: [
+          { key: "stage_1", label: "URL analysis", status: "done" },
+          { key: "stage_2", label: "Redirect check", status: "done" },
+          { key: "stage_3", label: "External checks", status: "done" },
+        ],
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -471,6 +562,33 @@ export function App() {
   const showSiteLocationBanner =
     Boolean(result) && (Boolean(knownSiteCountry) || result?.is_green_safe === false);
   const siteLocationText = knownSiteCountry || t.locationUnknown;
+  const analyzedHostname = (() => {
+    try {
+      if (!result?.analyzed_url) return "";
+      return new URL(result.analyzed_url).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  const subdomainPart = (() => {
+    const reg = (result?.registrable_domain || "").toLowerCase();
+    if (!analyzedHostname || !reg) return "";
+    if (!analyzedHostname.endsWith(`.${reg}`)) return "";
+    return analyzedHostname.slice(0, -(reg.length + 1));
+  })();
+  const hasSubdomainFocus = Boolean(result?.has_subdomains && result?.registrable_domain && subdomainPart);
+  const hasMisleadingSubdomainAlert = Boolean(
+    hasSubdomainFocus &&
+      result?.reason_keys?.some((k) => k === "brand_mismatch" || k === "lookalike_brand" || k === "brand")
+  );
+  const shouldShowResult =
+    Boolean(result) && (
+      !liveMeta ||
+      liveMeta.final ||
+      liveMeta.risk_level === "High" ||
+      result?.risk_level === "High" ||
+      (liveMeta.stage >= 2 && result?.risk_level !== "Low")
+    );
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
@@ -588,8 +706,39 @@ export function App() {
           </div>
         )}
 
+        {/* Live progress (always visible during live analysis) */}
+        {liveMeta && !loading && (
+          <div className="result-section live-progress">
+            <div className="live-progress__header">
+              <div className="result-section__title">{t.analysisSteps}</div>
+              <div className="progress-ring" style={{ ["--progress" as string]: `${liveMeta.progress}` }}>
+                <span className="progress-ring__value">{liveMeta.progress}%</span>
+              </div>
+            </div>
+            <div className="live-progress__status">
+              {liveMeta.final ? t.liveStatus : (liveMeta.status_text || t.waitingExternal)}
+            </div>
+            <div className="steps-list">
+              {liveMeta.steps.map((step) => (
+                <div className="step-row" key={step.key}>
+                  <span
+                    className={`step-row__dot ${
+                      step.status === "done"
+                        ? liveMeta.final
+                          ? "step-row__dot--done"
+                          : "step-row__dot--done-pending"
+                        : `step-row__dot--${step.status}`
+                    }`}
+                  />
+                  <span className="step-row__label">{step.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Results */}
-        {result && !loading && (
+        {result && shouldShowResult && !loading && (
           <div className="verdict">
             {/* Risk banner */}
             <div className={`verdict__banner verdict__banner--${v}`}>
@@ -629,10 +778,33 @@ export function App() {
                     <span className="url-row__value">{result.analyzed_url}</span>
                   </div>
                 )}
-                {result.has_subdomains && result.registrable_domain && (
-                  <div className="url-row">
-                    <span className="url-row__label">{t.mainDomain}</span>
-                    <span className="url-row__value">{result.registrable_domain}</span>
+                {hasSubdomainFocus && (
+                  <div
+                    className={`main-domain-focus ${hasMisleadingSubdomainAlert ? "main-domain-focus--warn" : ""}`}
+                    dir={language === "he" ? "rtl" : "ltr"}
+                  >
+                    <div className="main-domain-focus__row">
+                      {language === "he" ? (
+                        <span>
+                          הדומיין הראשי הוא: <strong className="main-domain-focus__main">{result.registrable_domain}</strong>
+                        </span>
+                      ) : (
+                        <span>
+                          The main domain is: <strong className="main-domain-focus__main">{result.registrable_domain}</strong>
+                        </span>
+                      )}
+                    </div>
+                    <div className="main-domain-focus__row">
+                      {language === "he" ? (
+                        <span>
+                          <strong className="main-domain-focus__sub">{subdomainPart}</strong> הינו תת דומיין בלבד.
+                        </span>
+                      ) : (
+                        <span>
+                          <strong className="main-domain-focus__sub">{subdomainPart}</strong> is only a subdomain.
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
                 {showSiteLocationBanner && (

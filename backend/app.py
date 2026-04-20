@@ -4,11 +4,13 @@ import logging
 import os
 import re
 import smtplib
+import threading
 import unicodedata
 import base64
 import ssl
 import socket
 import time
+import uuid
 from email.message import EmailMessage
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -45,6 +47,12 @@ limiter = Limiter(
     default_limits=[],
     storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
 )
+
+LIVE_JOB_TIMEOUT_SEC = int(os.getenv("LIVE_JOB_TIMEOUT_SEC", "20"))
+LIVE_CACHE_TTL_SEC = int(os.getenv("LIVE_CACHE_TTL_SEC", "180"))
+LIVE_ANALYSIS_JOBS: dict[str, dict] = {}
+LIVE_ANALYSIS_CACHE: dict[str, dict] = {}
+LIVE_LOCK = threading.Lock()
 
 
 def _production_mode() -> bool:
@@ -217,6 +225,17 @@ STRONG_LOCAL_WARNING_KEYS = {
     "no_https",
     "single_page_site",
 }
+MESSAGE_WARNING_KEYS = {
+    "message_pressure",
+    "message_aggressive",
+    "ai_social_engineering",
+    "ai_authority_impersonation",
+    "ai_sensitive_request",
+    "ai_threat_or_reward",
+    "ai_model_social_engineering",
+    "ai_model_impersonation",
+    "ai_model_sensitive_action",
+}
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
 COMPOUND_IMPERSONATION_SUFFIXES = {
     "security",
@@ -255,6 +274,9 @@ ACTION_SECURITY_TOKENS = {
     "confirm",
     "reset",
     "access",
+}
+GENERIC_SAFE_SUBDOMAIN_LABELS = {
+    "www", "m", "mail", "api", "cdn", "static", "img", "images", "assets", "docs", "help", "status",
 }
 GENERIC_NON_IDENTITY_TOKENS = {
     "login",
@@ -357,6 +379,7 @@ I18N = {
         "ai_model_social_engineering": "AI detected social-engineering intent in the message.",
         "ai_model_impersonation": "AI detected likely impersonation of a trusted organization.",
         "ai_model_sensitive_action": "AI detected request for sensitive user action.",
+        "ai_subdomain_impersonation_combo": "AI detected social-engineering text together with a potentially misleading subdomain.",
         "ai_model_unavailable": "AI semantic analysis is currently unavailable.",
         "intel_configured": "Advanced safety checks are connected: {sources}.",
         "intel_missing": "Some advanced safety checks are not connected yet.",
@@ -417,6 +440,7 @@ I18N = {
         "ai_model_social_engineering": "מנוע ה-AI זיהה כוונת הנדסה חברתית בהודעה.",
         "ai_model_impersonation": "מנוע ה-AI זיהה חשד להתחזות לגורם אמין.",
         "ai_model_sensitive_action": "מנוע ה-AI זיהה בקשה לפעולה רגישה מצד המשתמש.",
+        "ai_subdomain_impersonation_combo": "מנוע ה-AI זיהה הנדסה חברתית יחד עם תת-דומיין שעשוי להטעות.",
         "ai_model_unavailable": "ניתוח סמנטי מבוסס AI אינו זמין כרגע.",
         "intel_configured": "בדיקות בטיחות מתקדמות מחוברות: {sources}.",
         "intel_missing": "חלק מבדיקות הבטיחות המתקדמות עדיין לא מחוברות.",
@@ -1295,6 +1319,7 @@ def analyze_message_intent_with_model(message: str, url: str) -> tuple[int, list
 You are a phishing detection assistant.
 Analyze the message and URL semantically.
 Important:
+- The message can be in any language. Detect intent regardless of language.
 - Official informational/marketing messages are NOT phishing by default.
 - Mark sensitive_action=true only when there is an explicit request to login, pay, verify, share credentials, or perform account-security action.
 - Mark impersonation=true only when there are clear signs the sender pretends to be another trusted entity.
@@ -1781,6 +1806,30 @@ def _country_from_tld(hostname: str) -> tuple[str, str]:
     return tld, ""
 
 
+def _has_potentially_misleading_subdomain(hostname: str, registrable_domain: str) -> bool:
+    """
+    Heuristic for deceptive presentation:
+    subdomain exists and first visible label looks like a branded/service identity
+    (not generic infra labels such as www/cdn/api).
+    """
+    host = (hostname or "").lower().strip(".")
+    reg = (registrable_domain or "").lower().strip(".")
+    if not host or not reg or host == reg:
+        return False
+    if not host.endswith(f".{reg}"):
+        return False
+    sub = host[: -(len(reg) + 1)]
+    if not sub:
+        return False
+    first = sub.split(".", 1)[0]
+    if not first or first in GENERIC_SAFE_SUBDOMAIN_LABELS:
+        return False
+    letters_only = re.sub(r"[^a-z0-9]", "", first)
+    if len(letters_only) < 6:
+        return False
+    return True
+
+
 def analyze_page_language_signals(url: str) -> tuple[int, list[str], dict]:
     """
     Heuristic page-content analysis:
@@ -1866,6 +1915,190 @@ def build_explanation(language: str, risk_level: str, reason_keys: list[str], co
     if risk_level == "Medium":
         return t(language, "explain_medium")
     return t(language, "explain_not_high")
+
+
+def _severity_rank(level: str) -> int:
+    return {"Low": 0, "Medium": 1, "High": 2}.get(level, 0)
+
+
+def _escalate_level(current: str, candidate: str) -> str:
+    return current if _severity_rank(current) >= _severity_rank(candidate) else candidate
+
+
+def _risk_from_score(score: int) -> str:
+    if score <= 20:
+        return "Low"
+    if score <= 60:
+        return "Medium"
+    return "High"
+
+
+def _steps_payload(stage: int, final: bool) -> list[dict]:
+    return [
+        {"key": "stage_1", "label": "URL analysis", "status": "done" if stage >= 1 else "pending"},
+        {"key": "stage_2", "label": "Redirect check", "status": "done" if stage >= 2 else "pending"},
+        {
+            "key": "stage_3",
+            "label": "External checks",
+            "status": "done" if final or stage >= 3 else ("in_progress" if stage == 2 else "pending"),
+        },
+    ]
+
+
+def _stage_progress(stage: int, final: bool) -> int:
+    if final:
+        return 100
+    return {1: 33, 2: 66, 3: 100}.get(stage, 0)
+
+
+def _cache_get(url_key: str) -> dict | None:
+    now = time.time()
+    with LIVE_LOCK:
+        payload = LIVE_ANALYSIS_CACHE.get(url_key)
+        if not payload:
+            return None
+        if now - float(payload.get("ts", 0)) > LIVE_CACHE_TTL_SEC:
+            LIVE_ANALYSIS_CACHE.pop(url_key, None)
+            return None
+        return payload.get("result")
+
+
+def _cache_set(url_key: str, result: dict) -> None:
+    with LIVE_LOCK:
+        LIVE_ANALYSIS_CACHE[url_key] = {"ts": time.time(), "result": result}
+
+
+def _run_full_analysis_internal(payload: dict) -> dict:
+    """Reuse existing /analyze logic as final-stage engine without changing current behavior."""
+    try:
+        with app.test_client() as client:
+            resp = client.post("/analyze", json=payload)
+            if resp.is_json:
+                body = resp.get_json(silent=True) or {}
+                if isinstance(body, dict):
+                    return body
+    except Exception:
+        pass
+    return {"score": 0, "risk_level": "Low", "is_green_safe": False, "reasons": [], "reason_keys": []}
+
+
+def _build_stage1_snapshot(submitted_url: str, language: str) -> tuple[str, list[str], dict]:
+    url_score, url_reasons, _ctx = analyze_url(submitted_url)
+    parsed = urlparse(submitted_url if "://" in submitted_url else f"https://{submitted_url}")
+    hostname = (parsed.hostname or "").lower()
+    tls_ok = tls_certificate_valid(hostname) if hostname else False
+    if hostname and not tls_ok and any(k in url_reasons for k in ("brand_mismatch", "suspicious_tld", "lookalike_brand")):
+        url_score = max(url_score, 85)
+    risk = _risk_from_score(url_score)
+    reasons = [t(language, key) for key in url_reasons] if url_reasons else [t(language, "safe_now")]
+    snapshot = {
+        "score": url_score,
+        "risk_level": risk,
+        "is_green_safe": False,
+        "submitted_url": submitted_url,
+        "analyzed_url": submitted_url,
+        "redirect_chain": [submitted_url] if submitted_url else [],
+        "reason_keys": url_reasons,
+        "reasons": reasons,
+    }
+    return risk, url_reasons, snapshot
+
+
+def _run_live_pipeline(job_id: str, payload: dict) -> None:
+    language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
+    raw_url = (payload.get("url", "") or "").strip()
+    message = (payload.get("message", "") or "").strip()
+    submitted_url = normalize_url_for_checks(raw_url or extract_first_url(message))
+    if not submitted_url:
+        with LIVE_LOCK:
+            job = LIVE_ANALYSIS_JOBS.get(job_id)
+            if not job:
+                return
+            job["final"] = True
+            job["stage"] = 3
+            job["progress"] = 100
+            job["status_text"] = "No URL provided."
+        return
+
+    current_level, stage1_reasons, stage1_snapshot = _build_stage1_snapshot(submitted_url, language)
+    strong_stage1 = {"brand_mismatch", "lookalike_brand", "at_sign_userinfo"}
+    early_red = any(k in strong_stage1 for k in stage1_reasons)
+
+    with LIVE_LOCK:
+        job = LIVE_ANALYSIS_JOBS.get(job_id)
+        if not job:
+            return
+        job["stage"] = 1
+        job["risk_level"] = current_level
+        job["progress"] = _stage_progress(1, False)
+        job["steps"] = _steps_payload(1, False)
+        job["status_text"] = "Results are updated in real time as more data is analyzed"
+        job["result"] = stage1_snapshot
+
+    if early_red:
+        with LIVE_LOCK:
+            job = LIVE_ANALYSIS_JOBS.get(job_id)
+            if not job:
+                return
+            job["final"] = True
+            job["stage"] = 3
+            job["progress"] = 100
+            job["risk_level"] = "High"
+            job["steps"] = _steps_payload(3, True)
+            stage1_snapshot["risk_level"] = "High"
+            job["result"] = stage1_snapshot
+            job["status_text"] = "High-risk signal detected. Analysis completed early."
+        _cache_set(submitted_url, stage1_snapshot)
+        return
+
+    # Stage 2: redirect/domain consistency
+    expanded_url, short_keys, redirect_chain = expand_short_url(submitted_url)
+    stage2_level = current_level
+    if "short_link_unresolved" in short_keys:
+        stage2_level = _escalate_level(stage2_level, "Medium")
+    with LIVE_LOCK:
+        job = LIVE_ANALYSIS_JOBS.get(job_id)
+        if not job:
+            return
+        job["stage"] = 2
+        job["risk_level"] = stage2_level
+        job["progress"] = _stage_progress(2, False)
+        job["steps"] = _steps_payload(2, False)
+        job["status_text"] = "Waiting for external analysis..."
+        # Keep partial data visible while async intel runs.
+        partial = dict(stage1_snapshot)
+        partial["risk_level"] = stage2_level
+        partial["analyzed_url"] = expanded_url or submitted_url
+        partial["redirect_chain"] = redirect_chain or [submitted_url]
+        merged_keys = list(dict.fromkeys((partial.get("reason_keys") or []) + short_keys))
+        partial["reason_keys"] = merged_keys
+        partial["reasons"] = [t(language, k) for k in merged_keys] if merged_keys else [t(language, "safe_now")]
+        job["result"] = partial
+
+    # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
+    full_payload = {"url": submitted_url, "message": message, "language": language}
+    final_result = _run_full_analysis_internal(full_payload)
+    candidate = str(final_result.get("risk_level", "Low"))
+    final_level = _escalate_level(stage2_level, candidate)
+    if final_level != candidate:
+        final_result["risk_level"] = final_level
+        final_result["is_green_safe"] = False
+        final_result["score"] = max(int(final_result.get("score", 0) or 0), 61 if final_level == "High" else 30)
+    final_result["live_monotonic"] = True
+
+    with LIVE_LOCK:
+        job = LIVE_ANALYSIS_JOBS.get(job_id)
+        if not job:
+            return
+        job["final"] = True
+        job["stage"] = 3
+        job["risk_level"] = final_level
+        job["progress"] = 100
+        job["steps"] = _steps_payload(3, True)
+        job["status_text"] = "Analysis completed."
+        job["result"] = final_result
+
+    _cache_set(submitted_url, final_result)
 
 
 @app.post("/analyze")
@@ -1976,15 +2209,18 @@ def analyze():
         intel_reason_keys.extend(gsb_reason_keys)
         intel_key = gsb_note_key
 
-    # When URL has no heuristic warnings, message scores are informational only (capped).
+    # Message analysis always contributes at a baseline weight, even when URL heuristics look clean.
+    # This keeps social-engineering text signals meaningful without over-amplifying false positives.
     url_has_warnings = len([key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]) > 0
     if url_has_warnings:
-        total_score = min(
-            100,
-            url_score + text_score + intent_score + model_intent_score + page_score + structure_score + intel_score,
-        )
+        message_contrib = text_score + intent_score + model_intent_score
     else:
-        total_score = min(100, url_score + page_score + structure_score + intel_score)
+        message_contrib = min(25, int((text_score * 0.5) + (intent_score * 0.5) + (model_intent_score * 0.5)))
+
+    total_score = min(
+        100,
+        url_score + page_score + structure_score + intel_score + message_contrib,
+    )
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     brand_mismatch_hit = "brand_mismatch" in url_reason_keys
     if vt_malicious_hit:
@@ -2014,6 +2250,15 @@ def analyze():
     registrable_domain = get_registrable_domain(hostname) if hostname else ""
     host_no_www = hostname[4:] if hostname.startswith("www.") else hostname
     has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
+    potentially_misleading_subdomain = _has_potentially_misleading_subdomain(hostname, registrable_domain)
+    social_engineering_hit = (
+        "ai_social_engineering" in reason_keys
+        or "ai_model_social_engineering" in reason_keys
+    )
+    if social_engineering_hit and potentially_misleading_subdomain:
+        total_score = max(total_score, 85)
+        if "ai_subdomain_impersonation_combo" not in reason_keys:
+            reason_keys.append("ai_subdomain_impersonation_combo")
     # Performance guard: once a strong phishing hard-rule already fired, avoid slow
     # network trust checks that cannot change final risk classification.
     skip_expensive_trust_checks = brand_mismatch_hit or vt_malicious_hit
@@ -2058,6 +2303,10 @@ def analyze():
 
     green_checks = [
         {"key": "no_local_warnings", "status": "pass" if no_url_warnings else "fail"},
+        {
+            "key": "no_message_warnings",
+            "status": "pass" if not any(k in MESSAGE_WARNING_KEYS for k in reason_keys) else "fail",
+        },
         {"key": "vt_clean", "status": ("pass" if vt_clean else "fail") if vt_checked else "na"},
         {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
         {"key": "gsb_clean", "status": ("pass" if gsb_clean else "fail") if gsb_checked else "na"},
@@ -2075,8 +2324,18 @@ def analyze():
     vt_passes = (not vt_checked) or vt_clean
     urlscan_passes = (not urlscan_checked) or urlscan_clean
     gsb_passes = (not gsb_checked) or gsb_clean
+    message_passes = not any(k in MESSAGE_WARNING_KEYS for k in reason_keys)
     page_passes = (page_status_code is None) or page_exists
-    core_pass = no_url_warnings and vt_passes and urlscan_passes and gsb_passes and dns_ok and tls_ok and page_passes
+    core_pass = (
+        no_url_warnings
+        and message_passes
+        and vt_passes
+        and urlscan_passes
+        and gsb_passes
+        and dns_ok
+        and tls_ok
+        and page_passes
+    )
     if was_short_link:
         core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
@@ -2115,6 +2374,8 @@ def analyze():
         risk_level = "High"
     if brand_mismatch_hit:
         risk_level = "High"
+    if social_engineering_hit and potentially_misleading_subdomain:
+        risk_level = "High"
 
     return jsonify(
         {
@@ -2140,6 +2401,98 @@ def analyze():
             "page_audience": url_context.get("page_audience", ""),
         }
     )
+
+
+@app.post("/analyze/live/start")
+@limiter.limit("30 per minute")
+def analyze_live_start():
+    payload = request.get_json(silent=True) or {}
+    language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
+    raw_url = (payload.get("url", "") or "").strip()
+    message = (payload.get("message", "") or "").strip()
+    if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
+        return jsonify({"ok": False, "error": "payload_too_large"}), 413
+    submitted_url = normalize_url_for_checks(raw_url or extract_first_url(message))
+    if not submitted_url:
+        return jsonify({"ok": False, "error": "need_input", "reasons": [t(language, "need_input")]}), 400
+
+    cached = _cache_get(submitted_url)
+    if cached:
+        return jsonify(
+            {
+                "ok": True,
+                "analysis_id": "",
+                "cached": True,
+                "final": True,
+                "stage": 3,
+                "progress": 100,
+                "risk_level": cached.get("risk_level", "Low"),
+                "steps": _steps_payload(3, True),
+                "status_text": "Loaded from recent cache.",
+                "result": cached,
+            }
+        )
+
+    risk_level, reason_keys, snapshot = _build_stage1_snapshot(submitted_url, language)
+    job_id = str(uuid.uuid4())
+    with LIVE_LOCK:
+        LIVE_ANALYSIS_JOBS[job_id] = {
+            "id": job_id,
+            "created_at": time.time(),
+            "final": False,
+            "stage": 1,
+            "progress": 33,
+            "risk_level": risk_level,
+            "steps": _steps_payload(1, False),
+            "status_text": "Results are updated in real time as more data is analyzed",
+            "result": snapshot,
+            "payload": {"url": raw_url, "message": message, "language": language},
+        }
+
+    worker = threading.Thread(target=_run_live_pipeline, args=(job_id, {"url": raw_url, "message": message, "language": language}), daemon=True)
+    worker.start()
+
+    return jsonify(
+        {
+            "ok": True,
+            "analysis_id": job_id,
+            "cached": False,
+            "final": False,
+            "stage": 1,
+            "progress": 33,
+            "risk_level": risk_level,
+            "steps": _steps_payload(1, False),
+            "status_text": "Results are updated in real time as more data is analyzed",
+            "result": snapshot,
+        }
+    )
+
+
+@app.get("/analyze/live/status/<analysis_id>")
+@limiter.limit("180 per minute")
+def analyze_live_status(analysis_id: str):
+    with LIVE_LOCK:
+        job = LIVE_ANALYSIS_JOBS.get(analysis_id)
+        if not job:
+            return jsonify({"ok": False, "error": "analysis_not_found"}), 404
+        age = time.time() - float(job.get("created_at", 0))
+        if not job.get("final") and age > LIVE_JOB_TIMEOUT_SEC:
+            job["final"] = True
+            job["stage"] = max(2, int(job.get("stage", 1)))
+            job["progress"] = _stage_progress(job["stage"], False)
+            job["status_text"] = "External checks timed out. Partial result shown."
+        response = {
+            "ok": True,
+            "analysis_id": analysis_id,
+            "final": bool(job.get("final")),
+            "stage": int(job.get("stage", 1)),
+            "progress": int(job.get("progress", 0)),
+            "risk_level": job.get("risk_level", "Low"),
+            "steps": job.get("steps", _steps_payload(1, False)),
+            "status_text": job.get("status_text", ""),
+            "result": job.get("result", {}),
+        }
+    return jsonify(response)
 
 
 def _smtp_configured() -> bool:
