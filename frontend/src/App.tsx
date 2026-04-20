@@ -221,6 +221,7 @@ const reasonI18n = {
     hebrew_phishing_page_signals: "The page content in Hebrew includes phishing-style pressure/action terms.",
     hebrew_content_foreign_infra_mismatch: "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
     tld_country_notice: "Domain suffix points to a specific country.",
+    single_page_site: "The website appears to have only a single active page (very limited internal structure).",
     insufficient_trust_signals: "There were not enough trust signals to mark this link as safe.",
     intel_configured: "Advanced security sources are connected.",
     intel_missing: "Some advanced security sources are not connected yet."
@@ -268,6 +269,7 @@ const reasonI18n = {
     hebrew_phishing_page_signals: "בתוכן הדף בעברית נמצאו מונחי לחץ או פעולה שמאפיינים פישינג.",
     hebrew_content_foreign_infra_mismatch: "התוכן בדף בעברית, אבל תשתית הדומיין לא אופיינית לשירות שפונה לקהל עברי.",
     tld_country_notice: "סיומת הדומיין מצביעה על מדינה מסוימת.",
+    single_page_site: "נראה שלאתר יש דף פעיל יחיד בלבד (מבנה פנימי דל מאוד).",
     insufficient_trust_signals: "לא היו מספיק סימני אמון כדי לסמן את הקישור כבטוח.",
     intel_configured: "מקורות בדיקה מתקדמים מחוברים.",
     intel_missing: "חלק ממקורות הבדיקה המתקדמים עדיין לא מחוברים."

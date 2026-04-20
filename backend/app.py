@@ -211,6 +211,7 @@ STRONG_LOCAL_WARNING_KEYS = {
     "punycode",
     "suspicious_tld",
     "no_https",
+    "single_page_site",
 }
 SUSPICIOUS_WORDS = ("login", "verify", "secure", "account", "update")
 COMPOUND_IMPERSONATION_SUFFIXES = {
@@ -309,6 +310,7 @@ FAKE_FILE_TLDS = frozenset({
 CYRILLIC_OR_GREEK_CHARS = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
+HREF_RE = re.compile(r"""href\s*=\s*["']([^"'#][^"']*)["']""", re.IGNORECASE)
 HEBREW_PHISHING_PAGE_TERMS = (
     "החשבון שלך",
     "אימות זהות",
@@ -371,6 +373,7 @@ I18N = {
         "hebrew_phishing_page_signals": "The page content in Hebrew includes phishing-style pressure/action terms.",
         "hebrew_content_foreign_infra_mismatch": "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
         "tld_country_notice": "Domain suffix points to a specific country.",
+        "single_page_site": "Website appears to have only a single active page (very limited internal structure).",
         "need_input": "Please enter a URL or full message text.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
@@ -426,6 +429,7 @@ I18N = {
         "hebrew_phishing_page_signals": "בתוכן הדף בעברית נמצאו מונחי לחץ/פעולה שמאפיינים פישינג.",
         "hebrew_content_foreign_infra_mismatch": "התוכן בדף בעברית, אבל תשתית הדומיין אינה תואמת בדרך כלל לשירות שפונה לקהל עברי.",
         "tld_country_notice": "סיומת הדומיין מצביעה על מדינה מסוימת.",
+        "single_page_site": "נראה שלאתר יש דף פעיל יחיד בלבד (מבנה פנימי דל מאוד).",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
@@ -1561,6 +1565,86 @@ def _fetch_page_text_for_analysis(url: str) -> str:
         return ""
 
 
+def _fetch_html_for_analysis(url: str) -> tuple[str, str]:
+    """Return (html, final_url) after a few safe redirects."""
+    normalized = normalize_url_for_checks(url)
+    if not normalized or not _safe_url_for_server_redirect(normalized):
+        return "", normalized
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        with requests.Session() as session:
+            current = normalized
+            resp = None
+            for _ in range(5):
+                resp = _redirect_session_get(session, current, headers=headers, timeout=8)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                loc = resp.headers.get("Location")
+                if not loc:
+                    break
+                next_url = urljoin(current, loc.strip())
+                if not _safe_url_for_server_redirect(next_url):
+                    return "", current
+                current = next_url
+            if resp is None:
+                return "", current
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            if "text/html" not in ct:
+                return "", current
+            return (resp.text or "")[:200000], current
+    except Exception:
+        return "", normalized
+
+
+def analyze_site_structure_signal(url: str) -> tuple[int, list[str], dict]:
+    """
+    Structural signal: very few internal pages can indicate throwaway phishing sites.
+    Not a proof by itself, but a strong supporting signal.
+    """
+    html, final_url = _fetch_html_for_analysis(url)
+    if not html:
+        return 0, [], {}
+
+    p = urlparse(final_url)
+    host = (p.hostname or "").lower()
+    if not host:
+        return 0, [], {}
+
+    internal_paths: set[str] = set()
+    for href in HREF_RE.findall(html):
+        candidate = urljoin(final_url, href.strip())
+        cp = urlparse(candidate)
+        if cp.scheme not in ("http", "https"):
+            continue
+        if (cp.hostname or "").lower() != host:
+            continue
+        path = (cp.path or "").strip()
+        if not path or path == "/":
+            continue
+        internal_paths.add(path.rstrip("/"))
+        if len(internal_paths) >= 3:
+            break
+
+    lowered = html.lower()
+    nav_terms = (
+        "about", "contact", "privacy", "terms", "support", "faq",
+        "אודות", "צור קשר", "מדיניות פרטיות", "תנאי שימוש", "שירות לקוחות",
+    )
+    nav_hits = count_term_hits(lowered, nav_terms)
+
+    internal_count = len(internal_paths)
+    context = {"internal_pages_found": internal_count}
+    if internal_count <= 1 and nav_hits == 0:
+        return 30, ["single_page_site"], context
+    return 0, [], context
+
+
 def _fetch_page_text_with_playwright(url: str) -> str:
     """
     Render JS-heavy pages in a headless browser and extract visible text.
@@ -1799,9 +1883,13 @@ def analyze():
     intent_score, intent_reason_keys = analyze_message_intent(message)
     model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
     page_score, page_reason_keys, page_context = analyze_page_language_signals(url_to_check)
+    structure_score, structure_reason_keys, structure_context = analyze_site_structure_signal(url_to_check)
     url_reason_keys.extend(page_reason_keys)
+    url_reason_keys.extend(structure_reason_keys)
     if isinstance(page_context, dict):
         url_context.update(page_context)
+    if isinstance(structure_context, dict):
+        url_context.update(structure_context)
     intel_key, intel_sources = external_intel_status(url_to_check)
     intel_score = 0
     intel_reason_keys: list[str] = []
@@ -1825,9 +1913,12 @@ def analyze():
     # When URL has no heuristic warnings, message scores are informational only (capped).
     url_has_warnings = len([key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]) > 0
     if url_has_warnings:
-        total_score = min(100, url_score + text_score + intent_score + model_intent_score + page_score + intel_score)
+        total_score = min(
+            100,
+            url_score + text_score + intent_score + model_intent_score + page_score + structure_score + intel_score,
+        )
     else:
-        total_score = min(100, url_score + page_score + intel_score)
+        total_score = min(100, url_score + page_score + structure_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     brand_mismatch_hit = "brand_mismatch" in url_reason_keys
     if vt_malicious_hit:
