@@ -199,7 +199,7 @@ SHORTENER_DOMAINS = (
     "shorturl.at",
     "shorten.as",
 )
-NON_WARNING_LOCAL_KEYS = {"short_link_expanded", "short_link_destination_blocked"}
+NON_WARNING_LOCAL_KEYS = {"short_link_expanded", "short_link_destination_blocked", "tld_country_notice"}
 WEAK_LOCAL_WARNING_KEYS = {"brand", "suspicious_words", "long_url", "many_hyphens"}
 STRONG_LOCAL_WARNING_KEYS = {
     "brand_mismatch",
@@ -307,6 +307,24 @@ FAKE_FILE_TLDS = frozenset({
     "exe", "msi", "dll", "bat", "csv", "xml", "json", "md", "log", "map",
 })
 CYRILLIC_OR_GREEK_CHARS = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
+HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+HEBREW_PHISHING_PAGE_TERMS = (
+    "החשבון שלך",
+    "אימות זהות",
+    "אימות חשבון",
+    "זוהתה פעילות חריגה",
+    "החשבון הושעה",
+    "לחץ כאן",
+    "התחבר",
+    "הזן קוד",
+    "קוד אימות",
+    "כרטיס אשראי",
+    "עדכן פרטים",
+)
+FOREIGN_TLDS_FOR_HEBREW_RISK = {
+    "cn", "ru", "top", "xyz", "click", "shop", "online", "site", "icu", "monster"
+}
 I18N = {
     "en": {
         "invalid_url": "The link format looks invalid.",
@@ -350,6 +368,9 @@ I18N = {
         "short_link_expanded": "HTTP redirects were followed to the final URL.",
         "short_link_unresolved": "Could not follow the full redirect chain (error, loop, or blocked hop).",
         "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
+        "hebrew_phishing_page_signals": "The page content in Hebrew includes phishing-style pressure/action terms.",
+        "hebrew_content_foreign_infra_mismatch": "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
+        "tld_country_notice": "Domain suffix points to a specific country.",
         "need_input": "Please enter a URL or full message text.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
@@ -402,6 +423,9 @@ I18N = {
         "short_link_expanded": "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
         "short_link_unresolved": "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה, או צעד חסום).",
         "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
+        "hebrew_phishing_page_signals": "בתוכן הדף בעברית נמצאו מונחי לחץ/פעולה שמאפיינים פישינג.",
+        "hebrew_content_foreign_infra_mismatch": "התוכן בדף בעברית, אבל תשתית הדומיין אינה תואמת בדרך כלל לשירות שפונה לקהל עברי.",
+        "tld_country_notice": "סיומת הדומיין מצביעה על מדינה מסוימת.",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
@@ -789,6 +813,17 @@ def decode_url_for_analysis(url: str) -> str:
     return decoded
 
 
+def _drop_url_fragment(url: str) -> str:
+    """Return URL without client-side fragment (#...), preserving everything else."""
+    normalized = normalize_url_for_checks(url)
+    if not normalized:
+        return ""
+    p = urlparse(normalized)
+    if not p.fragment:
+        return normalized
+    return p._replace(fragment="").geturl()
+
+
 def _safe_url_for_server_redirect(url: str) -> bool:
     """
     Reject URLs that must not be fetched server-side (SSRF / internal network).
@@ -873,9 +908,15 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
     if not normalized:
         return normalized, reason_keys, redirect_chain
 
-    if not _safe_url_for_server_redirect(normalized):
-        reason_keys.append("short_link_unresolved")
+    # Client-side fragment is not sent to servers; treat fragment-free URL as canonical step.
+    canonical_start = _drop_url_fragment(normalized)
+    if canonical_start != normalized:
+        redirect_chain = [normalized, canonical_start]
+    else:
         redirect_chain = [normalized]
+
+    if not _safe_url_for_server_redirect(canonical_start):
+        reason_keys.append("short_link_unresolved")
         return normalized, reason_keys, redirect_chain
 
     headers = {
@@ -886,22 +927,24 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
         )
     }
     session = requests.Session()
-    current = normalized
-    redirect_chain = [current]
+    current = canonical_start
     max_hops = 12
     last_resp: requests.Response | None = None
+    saw_http_redirect = False
 
     for _ in range(max_hops):
         try:
             r = _redirect_session_get(session, current, headers=headers, timeout=12)
         except Exception:
-            if len(redirect_chain) > 1:
+            # Network unresolved applies when HTTP redirect chain started and then failed.
+            if saw_http_redirect:
                 reason_keys.append("short_link_unresolved")
             return current, reason_keys, redirect_chain
 
         last_resp = r
 
         if r.status_code in (301, 302, 303, 307, 308):
+            saw_http_redirect = True
             loc = r.headers.get("Location")
             if not loc:
                 reason_keys.append("short_link_unresolved")
@@ -925,7 +968,7 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
     if last_resp is not None and _html_interstitial_or_block_page(last_resp):
         reason_keys.append("short_link_expanded")
         reason_keys.append("short_link_destination_blocked")
-        final = normalized
+        final = canonical_start
         return final, reason_keys, redirect_chain
 
     if len(redirect_chain) > 1:
@@ -1472,6 +1515,177 @@ def page_http_status(url: str) -> int | None:
         return None
 
 
+def _strip_html_to_text(html: str) -> str:
+    if not html:
+        return ""
+    without_scripts = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", html)
+    no_tags = HTML_TAG_RE.sub(" ", without_scripts)
+    text = re.sub(r"\s+", " ", no_tags).strip()
+    return unquote(text)
+
+
+def _fetch_page_text_for_analysis(url: str) -> str:
+    """Fetch a small HTML snapshot for language/intent heuristics."""
+    normalized = normalize_url_for_checks(url)
+    if not normalized or not _safe_url_for_server_redirect(normalized):
+        return ""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        with requests.Session() as session:
+            current = normalized
+            resp = None
+            for _ in range(4):
+                resp = _redirect_session_get(session, current, headers=headers, timeout=8)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                loc = resp.headers.get("Location")
+                if not loc:
+                    break
+                next_url = urljoin(current, loc.strip())
+                if not _safe_url_for_server_redirect(next_url):
+                    return ""
+                current = next_url
+            if resp is None:
+                return ""
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            if "text/html" not in ct:
+                return ""
+            return _strip_html_to_text((resp.text or "")[:120000])
+    except Exception:
+        return ""
+
+
+def _fetch_page_text_with_playwright(url: str) -> str:
+    """
+    Render JS-heavy pages in a headless browser and extract visible text.
+    Requires `playwright` package and installed Chromium runtime.
+    """
+    enabled = os.getenv("ENABLE_PLAYWRIGHT_RENDER", "1").lower() not in {"0", "false", "no", "off"}
+    if not enabled:
+        return ""
+    normalized = normalize_url_for_checks(url)
+    if not normalized or not _safe_url_for_server_redirect(normalized):
+        return ""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return ""
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_default_navigation_timeout(8000)
+            page.set_default_timeout(6000)
+            page.goto(normalized, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=2500)
+            except Exception:
+                pass
+            html = page.content() or ""
+            text = page.locator("body").inner_text(timeout=1500) or ""
+            browser.close()
+            combined = f"{text}\n{_strip_html_to_text(html)}".strip()
+            return combined[:120000]
+    except Exception:
+        return ""
+
+
+def _detect_page_audience(text: str) -> str:
+    lower = (text or "").lower()
+    heb_count = len(HEBREW_CHAR_RE.findall(lower))
+    arabic_count = len(re.findall(r"[\u0600-\u06FF]", lower))
+    cyrillic_count = len(re.findall(r"[\u0400-\u04FF]", lower))
+    latin_count = len(re.findall(r"[a-z]", lower))
+    max_count = max(heb_count, arabic_count, cyrillic_count, latin_count)
+    if max_count < 20:
+        return ""
+    if max_count == heb_count:
+        return "he"
+    if max_count == arabic_count:
+        return "ar"
+    if max_count == cyrillic_count:
+        return "ru"
+    if max_count == latin_count:
+        return "en"
+    return ""
+
+
+def _country_from_tld(hostname: str) -> tuple[str, str]:
+    """
+    Return (tld, country_code) based on domain suffix.
+    For country-code TLDs we use ISO-like 2-letter code (uk -> GB).
+    """
+    host = (hostname or "").strip().lower()
+    if not host:
+        return "", ""
+    ext = tldextract.extract(host)
+    suffix = (ext.suffix or "").lower()
+    if not suffix:
+        return "", ""
+    tld = suffix.split(".")[-1]
+    if not tld:
+        return "", ""
+    if tld == "uk":
+        return tld, "GB"
+    if len(tld) == 2 and tld.isalpha():
+        return tld, tld.upper()
+    return tld, ""
+
+
+def analyze_page_language_signals(url: str) -> tuple[int, list[str], dict]:
+    """
+    Heuristic page-content analysis:
+    - Hebrew phishing-style wording
+    - Hebrew-content vs foreign-infrastructure mismatch
+    """
+    text = _fetch_page_text_for_analysis(url)
+    # Fallback for JS-rendered pages where plain HTTP fetch returns little/no useful text.
+    if len(text) < 80:
+        rendered_text = _fetch_page_text_with_playwright(url)
+        if len(rendered_text) > len(text):
+            text = rendered_text
+    if not text:
+        return 0, [], {}
+
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    hostname = (parsed.hostname or "").lower()
+    tld, tld_country_code = _country_from_tld(hostname)
+
+    heb_chars = len(HEBREW_CHAR_RE.findall(text))
+    ascii_letters = len(re.findall(r"[a-zA-Z]", text))
+    dominant_hebrew = heb_chars >= 25 and heb_chars >= (ascii_letters * 1.3)
+    lower_text = text.lower()
+
+    score = 0
+    reasons: list[str] = []
+    context: dict = {}
+    audience = _detect_page_audience(text)
+    context["page_audience"] = audience
+    if tld:
+        context["domain_tld"] = tld
+    if tld_country_code:
+        context["tld_country_code"] = tld_country_code
+
+    if dominant_hebrew:
+        page_phishing_hits = count_term_hits(lower_text, HEBREW_PHISHING_PAGE_TERMS)
+        if page_phishing_hits >= 2:
+            score += min(26, 14 + page_phishing_hits * 4)
+            reasons.append("hebrew_phishing_page_signals")
+
+        if tld in FOREIGN_TLDS_FOR_HEBREW_RISK:
+            score += 25
+            reasons.append("hebrew_content_foreign_infra_mismatch")
+
+    return min(45, score), reasons, context
+
+
 def domain_age_days(hostname: str) -> int | None:
     try:
         data = whois.whois(hostname)
@@ -1584,6 +1798,10 @@ def analyze():
     text_score, text_reason_keys = analyze_message_text(message)
     intent_score, intent_reason_keys = analyze_message_intent(message)
     model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
+    page_score, page_reason_keys, page_context = analyze_page_language_signals(url_to_check)
+    url_reason_keys.extend(page_reason_keys)
+    if isinstance(page_context, dict):
+        url_context.update(page_context)
     intel_key, intel_sources = external_intel_status(url_to_check)
     intel_score = 0
     intel_reason_keys: list[str] = []
@@ -1607,9 +1825,9 @@ def analyze():
     # When URL has no heuristic warnings, message scores are informational only (capped).
     url_has_warnings = len([key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]) > 0
     if url_has_warnings:
-        total_score = min(100, url_score + text_score + intent_score + model_intent_score + intel_score)
+        total_score = min(100, url_score + text_score + intent_score + model_intent_score + page_score + intel_score)
     else:
-        total_score = min(100, url_score + intel_score)
+        total_score = min(100, url_score + page_score + intel_score)
     vt_malicious_hit = "vt_malicious" in intel_reason_keys
     brand_mismatch_hit = "brand_mismatch" in url_reason_keys
     if vt_malicious_hit:
@@ -1628,6 +1846,14 @@ def analyze():
 
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
     hostname = (parsed.hostname or "").lower()
+    tld, tld_country_code = _country_from_tld(hostname)
+    if tld and not url_context.get("domain_tld"):
+        url_context["domain_tld"] = tld
+    if tld_country_code and not url_context.get("tld_country_code"):
+        url_context["tld_country_code"] = tld_country_code
+    if language == "he" and tld_country_code and tld_country_code != "IL":
+        if "tld_country_notice" not in reason_keys:
+            reason_keys.append("tld_country_notice")
     registrable_domain = get_registrable_domain(hostname) if hostname else ""
     host_no_www = hostname[4:] if hostname.startswith("www.") else hostname
     has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
@@ -1747,6 +1973,9 @@ def analyze():
             "lookalike_target": url_context.get("lookalike_target", ""),
             "lookalike_seen": url_context.get("lookalike_seen", ""),
             "brand_target": url_context.get("brand_target", ""),
+            "domain_tld": url_context.get("domain_tld", ""),
+            "tld_country_code": url_context.get("tld_country_code", ""),
+            "page_audience": url_context.get("page_audience", ""),
         }
     )
 

@@ -6,3 +6,4 @@ certifi>=2024.0.0
 python-dotenv
 python-whois
 tldextract
+playwright

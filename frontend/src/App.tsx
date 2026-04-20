@@ -32,6 +32,9 @@ type AnalysisResponse = {
   lookalike_target?: string;
   lookalike_seen?: string;
   brand_target?: string;
+  domain_tld?: string;
+  tld_country_code?: string;
+  page_audience?: string;
 };
 
 type Language = "en" | "he";
@@ -66,7 +69,10 @@ const translations = {
     analyzedUrl: "Real destination",
     decodedUrl: "Readable link after decoding",
     redirectChain: "Redirect path",
+    redirectPathToggle: "Show redirect path",
     mainDomain: "Main domain",
+    siteLocation: "Website location",
+    locationUnknown: "Unknown",
     reasons: "What affected the result",
     greenChecks: "Trust and safety checks",
     statusPass: "Passed",
@@ -127,7 +133,10 @@ const translations = {
     analyzedUrl: "היעד האמיתי",
     decodedUrl: "הקישור אחרי פענוח",
     redirectChain: "מסלול הפניות",
+    redirectPathToggle: "הצג מסלול הפניות",
     mainDomain: "דומיין ראשי",
+    siteLocation: "האתר ממקום ב",
+    locationUnknown: "לא ידוע",
     reasons: "מה השפיע על התוצאה",
     greenChecks: "בדיקות אמון ובטיחות",
     statusPass: "עבר",
@@ -209,6 +218,9 @@ const reasonI18n = {
     short_link_expanded: "HTTP redirects were followed to the final URL.",
     short_link_unresolved: "The full redirect chain could not be followed (error, loop, or blocked hop).",
     short_link_destination_blocked: "Redirects ended on a provider block or interstitial page; analysis uses the link you submitted.",
+    hebrew_phishing_page_signals: "The page content in Hebrew includes phishing-style pressure/action terms.",
+    hebrew_content_foreign_infra_mismatch: "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
+    tld_country_notice: "Domain suffix points to a specific country.",
     insufficient_trust_signals: "There were not enough trust signals to mark this link as safe.",
     intel_configured: "Advanced security sources are connected.",
     intel_missing: "Some advanced security sources are not connected yet."
@@ -253,6 +265,9 @@ const reasonI18n = {
     short_link_expanded: "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
     short_link_unresolved: "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה או צעד חסום).",
     short_link_destination_blocked: "ההפניות הסתיימו בדף חסימה או ביניים של ספק; הניתוח מבוסס על הקישור שהזנת.",
+    hebrew_phishing_page_signals: "בתוכן הדף בעברית נמצאו מונחי לחץ או פעולה שמאפיינים פישינג.",
+    hebrew_content_foreign_infra_mismatch: "התוכן בדף בעברית, אבל תשתית הדומיין לא אופיינית לשירות שפונה לקהל עברי.",
+    tld_country_notice: "סיומת הדומיין מצביעה על מדינה מסוימת.",
     insufficient_trust_signals: "לא היו מספיק סימני אמון כדי לסמן את הקישור כבטוח.",
     intel_configured: "מקורות בדיקה מתקדמים מחוברים.",
     intel_missing: "חלק ממקורות הבדיקה המתקדמים עדיין לא מחוברים."
@@ -328,6 +343,18 @@ export function App() {
     return checkLabels[check.key]?.[language] ?? check.key;
   };
 
+  const countryNameFromTld = (data: AnalysisResponse): string => {
+    const code = (data.tld_country_code || "").trim().toUpperCase();
+    if (!code) return "";
+    try {
+      const locale = language === "he" ? "he" : "en";
+      const dn = new Intl.DisplayNames([locale], { type: "region" });
+      return dn.of(code) || "";
+    } catch {
+      return "";
+    }
+  };
+
   const getLocalizedReasons = (data: AnalysisResponse): string[] => {
     if (data.reason_keys?.length) {
       return data.reason_keys.map((key) => {
@@ -347,6 +374,13 @@ export function App() {
               return `הקישור אינו ${target} אלא ניסיון חיקוי!`;
             }
             return `This is not ${target}. It is likely an imitation attempt!`;
+          }
+        }
+        if (key === "tld_country_notice") {
+          const country = countryNameFromTld(data);
+          if (country) {
+            if (language === "he") return `האתר ממקום ב: ${country}`;
+            return `Website is in: ${country}`;
           }
         }
         return reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key;
@@ -420,7 +454,7 @@ export function App() {
   const v = result ? riskVariant(result.risk_level) : null;
   const hasRedirect = result?.redirect_chain && result.redirect_chain.length > 1;
   const hasUrlDiff = result?.submitted_url && result.submitted_url !== result.analyzed_url;
-  const hasDecodedDiff = result?.decoded_url && result.decoded_url !== result.analyzed_url;
+  const siteLocationText = result ? countryNameFromTld(result) || t.locationUnknown : t.locationUnknown;
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
@@ -560,7 +594,7 @@ export function App() {
             </div>
 
             {/* URL info */}
-            {(hasUrlDiff || hasDecodedDiff || hasRedirect || (result.has_subdomains && result.registrable_domain)) && (
+            {(hasUrlDiff || hasRedirect || !!result?.analyzed_url || !!result?.submitted_url) && (
               <div className="result-section">
                 <div className="result-section__title">{t.urlInfoTitle}</div>
 
@@ -576,34 +610,35 @@ export function App() {
                     </div>
                   </>
                 )}
-
-                {hasDecodedDiff && (
+                {!hasUrlDiff && result.analyzed_url && (
                   <div className="url-row">
-                    <span className="url-row__label">{t.decodedUrl}</span>
-                    <span className="url-row__value">{result.decoded_url}</span>
+                    <span className="url-row__label">{t.analyzedUrl}</span>
+                    <span className="url-row__value">{result.analyzed_url}</span>
                   </div>
                 )}
-
-                {result.has_subdomains && result.registrable_domain && (
-                  <div className="url-row">
-                    <span className="url-row__label">{t.mainDomain}</span>
-                    <span className="url-row__value">{result.registrable_domain}</span>
-                  </div>
-                )}
+                <div className="site-location-banner" dir={language === "he" ? "rtl" : "ltr"}>
+                  <span className="site-location-banner__label">{t.siteLocation}:</span>
+                  <span className="site-location-banner__value">{siteLocationText}</span>
+                </div>
 
                 {hasRedirect && (
-                  <>
-                    <div className="url-row__label" style={{ marginTop: 8 }}>{t.redirectChain}</div>
-                    {result.redirect_chain!.map((step, i) => (
-                      <div key={i}>
-                        {i > 0 && <div className="chain-step__arrow">&#8595;</div>}
-                        <div className="chain-step">
-                          <span className={`chain-step__dot ${i === result.redirect_chain!.length - 1 ? "chain-step__dot--final" : ""}`} />
-                          <span className="chain-step__url">{step}</span>
-                        </div>
+                  <details className="redirect-details">
+                    <summary className="redirect-details__summary">{t.redirectPathToggle}</summary>
+                    <div className="redirect-window" role="region" aria-label={t.redirectChain}>
+                      <div className="redirect-window__title">{t.redirectChain}</div>
+                      <div className="redirect-window__content">
+                        {result.redirect_chain!.map((step, i) => (
+                          <div key={i}>
+                            {i > 0 && <div className="chain-step__arrow">&#8595;</div>}
+                            <div className="chain-step">
+                              <span className={`chain-step__dot ${i === result.redirect_chain!.length - 1 ? "chain-step__dot--final" : ""}`} />
+                              <span className="chain-step__url">{step}</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </>
+                    </div>
+                  </details>
                 )}
               </div>
             )}
