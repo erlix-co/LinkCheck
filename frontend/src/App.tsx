@@ -215,6 +215,10 @@ const reasonI18n = {
     urlscan_clean: "A global website scanning service did not find malicious signs.",
     urlscan_pending: "A global website scanning service is still checking this link.",
     urlscan_unavailable: "Website scanning service is unavailable right now.",
+    gsb_malicious: "Google Safe Browsing flagged this link as unsafe.",
+    gsb_suspicious: "Google Safe Browsing found suspicious threat indicators for this link.",
+    gsb_clean: "Google Safe Browsing did not report this link as unsafe.",
+    gsb_unavailable: "Google Safe Browsing check is unavailable right now.",
     short_link_expanded: "HTTP redirects were followed to the final URL.",
     short_link_unresolved: "The full redirect chain could not be followed (error, loop, or blocked hop).",
     short_link_destination_blocked: "Redirects ended on a provider block or interstitial page; analysis uses the link you submitted.",
@@ -263,6 +267,10 @@ const reasonI18n = {
     urlscan_clean: "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
     urlscan_pending: "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
     urlscan_unavailable: "שירות סריקת האתרים אינו זמין כרגע.",
+    gsb_malicious: "Google Safe Browsing סימן את הקישור כלא בטוח.",
+    gsb_suspicious: "Google Safe Browsing מצא אינדיקציות חשודות לקישור.",
+    gsb_clean: "Google Safe Browsing לא סימן את הקישור כלא בטוח.",
+    gsb_unavailable: "בדיקת Google Safe Browsing אינה זמינה כרגע.",
     short_link_expanded: "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
     short_link_unresolved: "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה או צעד חסום).",
     short_link_destination_blocked: "ההפניות הסתיימו בדף חסימה או ביניים של ספק; הניתוח מבוסס על הקישור שהזנת.",
@@ -284,6 +292,7 @@ const checkLabels: Record<string, Record<Language, string>> = {
   no_local_warnings: { en: "Suspicious signs in the link itself", he: "סימנים חשודים בקישור עצמו" },
   vt_clean: { en: "Check in global virus and threat databases", he: "בדיקה במאגרי וירוסים ואיומים עולמיים" },
   urlscan_clean: { en: "Global website behavior scan", he: "סריקה עולמית של התנהגות האתר" },
+  gsb_clean: { en: "Check in Google's Safe Browsing threat lists", he: "בדיקה במאגרי הגלישה הבטוחה של Google" },
   dns_resolves: { en: "Website address is active on the internet", he: "כתובת האתר פעילה ברשת" },
   tls_valid: { en: "Secure HTTPS certificate", he: "תעודת HTTPS מאובטחת ותקינה" },
   page_available: { en: "The specific page exists and is reachable", he: "הדף הספציפי קיים ונגיש" },
@@ -395,6 +404,7 @@ export function App() {
     if (
       key.startsWith("vt_clean") ||
       key.startsWith("urlscan_clean") ||
+      key.startsWith("gsb_clean") ||
       key === "short_link_expanded"
     )
       return "\u2705";
@@ -456,7 +466,10 @@ export function App() {
   const v = result ? riskVariant(result.risk_level) : null;
   const hasRedirect = result?.redirect_chain && result.redirect_chain.length > 1;
   const hasUrlDiff = result?.submitted_url && result.submitted_url !== result.analyzed_url;
-  const siteLocationText = result ? countryNameFromTld(result) || t.locationUnknown : t.locationUnknown;
+  const knownSiteCountry = result ? countryNameFromTld(result) : "";
+  const showSiteLocationBanner =
+    Boolean(result) && (Boolean(knownSiteCountry) || result?.is_green_safe === false);
+  const siteLocationText = knownSiteCountry || t.locationUnknown;
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
@@ -618,10 +631,18 @@ export function App() {
                     <span className="url-row__value">{result.analyzed_url}</span>
                   </div>
                 )}
-                <div className="site-location-banner" dir={language === "he" ? "rtl" : "ltr"}>
-                  <span className="site-location-banner__label">{t.siteLocation}:</span>
-                  <span className="site-location-banner__value">{siteLocationText}</span>
-                </div>
+                {result.has_subdomains && result.registrable_domain && (
+                  <div className="url-row">
+                    <span className="url-row__label">{t.mainDomain}</span>
+                    <span className="url-row__value">{result.registrable_domain}</span>
+                  </div>
+                )}
+                {showSiteLocationBanner && (
+                  <div className="site-location-banner" dir={language === "he" ? "rtl" : "ltr"}>
+                    <span className="site-location-banner__label">{t.siteLocation}:</span>
+                    <span className="site-location-banner__value">{siteLocationText}</span>
+                  </div>
+                )}
 
                 {hasRedirect && (
                   <details className="redirect-details">

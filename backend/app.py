@@ -105,7 +105,8 @@ BRAND_PATTERNS = ("nike", "paypal", "benetton", "amazon")
 PROTECTED_BRANDS = ("bankisrael", "paypal", "amazon", "nike", "benetton")
 BRAND_CANONICAL_DOMAINS = {
     "paypal": {"paypal.com"},
-    "amazon": {"amazon.com"},
+    # Include known Amazon-owned service/static roots to reduce false positives on legitimate assets.
+    "amazon": {"amazon.com", "amazonaws.com", "ssl-images-amazon.com", "media-amazon.com"},
     "nike": {"nike.com"},
     "benetton": {"benetton.com"},
     "apple": {"apple.com"},
@@ -166,6 +167,9 @@ TRUSTED_TARGET_LABELS = (
 TRUSTED_ROOT_DOMAINS = {
     "paypal.com",
     "amazon.com",
+    "ssl-images-amazon.com",
+    "media-amazon.com",
+    "amazonaws.com",
     "apple.com",
     "google.com",
     "google.co.il",
@@ -367,6 +371,10 @@ I18N = {
         "urlscan_clean": "A global website scanning service did not find malicious signs.",
         "urlscan_pending": "A global website scanning service is still checking this link.",
         "urlscan_unavailable": "Website scanning service is unavailable right now.",
+        "gsb_malicious": "Google Safe Browsing flagged this link as unsafe.",
+        "gsb_suspicious": "Google Safe Browsing found suspicious threat indicators for this link.",
+        "gsb_clean": "Google Safe Browsing did not report this link as unsafe.",
+        "gsb_unavailable": "Google Safe Browsing check is unavailable right now.",
         "short_link_expanded": "HTTP redirects were followed to the final URL.",
         "short_link_unresolved": "Could not follow the full redirect chain (error, loop, or blocked hop).",
         "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
@@ -423,6 +431,10 @@ I18N = {
         "urlscan_clean": "שירות עולמי לסריקת אתרים לא מצא סימנים זדוניים.",
         "urlscan_pending": "שירות עולמי לסריקת אתרים עדיין בודק את הקישור.",
         "urlscan_unavailable": "שירות סריקת האתרים אינו זמין כרגע.",
+        "gsb_malicious": "Google Safe Browsing סימן את הקישור כלא בטוח.",
+        "gsb_suspicious": "Google Safe Browsing מצא אינדיקציות חשודות לקישור.",
+        "gsb_clean": "Google Safe Browsing לא סימן את הקישור כלא בטוח.",
+        "gsb_unavailable": "בדיקת Google Safe Browsing אינה זמינה כרגע.",
         "short_link_expanded": "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
         "short_link_unresolved": "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה, או צעד חסום).",
         "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
@@ -1008,6 +1020,9 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
 
     registrable_domain = get_registrable_domain(hostname)
     registrable_label = get_primary_label(hostname)
+    is_brand_canonical_domain = any(
+        registrable_domain in domains for domains in BRAND_CANONICAL_DOMAINS.values()
+    )
 
     # Strong phishing: embedded trusted root domain inside subdomain but registrable owner differs.
     # Example: apple.com.verify-user.net embeds "apple.com" while registrable is verify-user.net.
@@ -1063,7 +1078,10 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     # This avoids false positives on legitimate country domains like amazon.de.
     brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
     if brand_hit and "brand_mismatch" not in reasons:
-        if registrable_label and registrable_label != brand_hit:
+        canonical_domains = BRAND_CANONICAL_DOMAINS.get(brand_hit, set())
+        if registrable_domain in canonical_domains:
+            brand_hit = ""
+        if brand_hit and registrable_label and registrable_label != brand_hit:
             score += 20
             reasons.append("brand")
             context["brand_target"] = brand_hit
@@ -1134,7 +1152,7 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         reasons.append("long_url")
 
     # Rule: many hyphens can indicate deceptive domain naming.
-    if normalized_url.count("-") >= 3:
+    if normalized_url.count("-") >= 3 and not is_brand_canonical_domain:
         score += 10
         reasons.append("many_hyphens")
 
@@ -1354,6 +1372,8 @@ def external_intel_status(url: str) -> tuple[str, list[str]]:
         enabled_sources.append("VirusTotal")
     if os.getenv("URLSCAN_API_KEY"):
         enabled_sources.append("URLScan")
+    if os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
+        enabled_sources.append("Google Safe Browsing")
 
     if enabled_sources:
         return "intel_configured", enabled_sources
@@ -1452,6 +1472,44 @@ def query_urlscan(url: str, api_key: str) -> tuple[int, list[str], str]:
         return 0, [], "urlscan_unavailable"
     except Exception:
         return 0, [], "urlscan_unavailable"
+
+
+def query_google_safe_browsing(url: str, api_key: str) -> tuple[int, list[str], str]:
+    """
+    Returns: (score_delta, reason_keys, intel_note_key)
+    """
+    endpoint = (
+        "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+        f"?key={api_key}"
+    )
+    payload = {
+        "client": {"clientId": "linkcheck", "clientVersion": "1.0"},
+        "threatInfo": {
+            "threatTypes": [
+                "MALWARE",
+                "SOCIAL_ENGINEERING",
+                "UNWANTED_SOFTWARE",
+                "POTENTIALLY_HARMFUL_APPLICATION",
+            ],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}],
+        },
+    }
+    try:
+        resp = requests.post(endpoint, json=payload, timeout=8)
+        if not resp.ok:
+            return 0, [], "gsb_unavailable"
+        body = resp.json() if resp.text else {}
+        matches = body.get("matches", []) or []
+        if not matches:
+            return 0, ["gsb_clean"], "intel_configured"
+        threat_types = {str(m.get("threatType", "")).upper() for m in matches}
+        if "MALWARE" in threat_types or "SOCIAL_ENGINEERING" in threat_types:
+            return 50, ["gsb_malicious"], "intel_configured"
+        return 20, ["gsb_suspicious"], "intel_configured"
+    except Exception:
+        return 0, [], "gsb_unavailable"
 
 
 def dns_resolves(hostname: str) -> bool:
@@ -1910,6 +1968,14 @@ def analyze():
         intel_reason_keys.extend(us_reason_keys)
         intel_key = us_note_key
 
+    if url_to_check and os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
+        gsb_score, gsb_reason_keys, gsb_note_key = query_google_safe_browsing(
+            url_to_check, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
+        )
+        intel_score += gsb_score
+        intel_reason_keys.extend(gsb_reason_keys)
+        intel_key = gsb_note_key
+
     # When URL has no heuristic warnings, message scores are informational only (capped).
     url_has_warnings = len([key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]) > 0
     if url_has_warnings:
@@ -1975,10 +2041,13 @@ def analyze():
         age_days = domain_age_days(hostname) if hostname else None
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
+    gsb_configured = bool(os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"))
     vt_clean = not vt_configured or "vt_clean" in intel_reason_keys
     vt_checked = vt_configured
     urlscan_clean = not urlscan_configured or "urlscan_clean" in intel_reason_keys
     urlscan_checked = urlscan_configured
+    gsb_clean = not gsb_configured or "gsb_clean" in intel_reason_keys
+    gsb_checked = gsb_configured
     url_only_warning_keys = [key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
     no_url_warnings = len(url_only_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
@@ -1991,6 +2060,7 @@ def analyze():
         {"key": "no_local_warnings", "status": "pass" if no_url_warnings else "fail"},
         {"key": "vt_clean", "status": ("pass" if vt_clean else "fail") if vt_checked else "na"},
         {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
+        {"key": "gsb_clean", "status": ("pass" if gsb_clean else "fail") if gsb_checked else "na"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
         {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
         {"key": "page_available", "status": page_status, "value": page_status_code},
@@ -2004,8 +2074,9 @@ def analyze():
     # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
     vt_passes = (not vt_checked) or vt_clean
     urlscan_passes = (not urlscan_checked) or urlscan_clean
+    gsb_passes = (not gsb_checked) or gsb_clean
     page_passes = (page_status_code is None) or page_exists
-    core_pass = no_url_warnings and vt_passes and urlscan_passes and dns_ok and tls_ok and page_passes
+    core_pass = no_url_warnings and vt_passes and urlscan_passes and gsb_passes and dns_ok and tls_ok and page_passes
     if was_short_link:
         core_pass = core_pass and short_link_resolved
     age_not_risky = age_days is None or age_days >= 30
