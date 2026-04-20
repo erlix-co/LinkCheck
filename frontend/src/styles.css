@@ -100,6 +100,27 @@ body::before {
 }
 
 /* ═══════════════════════════════════════
+   TOP RAIL
+   ═══════════════════════════════════════ */
+
+.top-rail {
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+  animation: fadeSlideUp 0.6s ease 0.06s both;
+}
+
+.top-rail__erlix-logo {
+  height: 28px;
+  width: auto;
+  opacity: 0.9;
+  filter: drop-shadow(0 2px 10px rgba(45, 140, 240, 0.22));
+}
+
+/* ═══════════════════════════════════════
    HEADER
    ═══════════════════════════════════════ */
 
@@ -107,8 +128,8 @@ body::before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-xl);
+  gap: 2px;
+  margin-bottom: var(--space-md);
   animation: fadeSlideUp 0.6s ease both;
 }
 
@@ -117,7 +138,7 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: var(--space-xs);
+  margin-bottom: 0;
 }
 
 .header__logo-glow {
@@ -139,8 +160,20 @@ body::before {
   transition: transform 0.4s ease;
 }
 
+.header__logo--linkcheck {
+  height: clamp(120px, 34vw, 180px);
+  display: block;
+  transform: scale(1.34);
+  transform-origin: center center;
+  margin: -40px 0 -36px;
+}
+
 .header__logo-wrap:hover .header__logo {
   transform: scale(1.05);
+}
+
+.header__logo-wrap:hover .header__logo--linkcheck {
+  transform: scale(1.42);
 }
 
 .header__title {
@@ -156,10 +189,13 @@ body::before {
 
 .header__subtitle {
   color: var(--color-text-muted);
-  font-size: 0.92rem;
+  font-size: 0.86rem;
   text-align: center;
-  max-width: 340px;
-  line-height: 1.6;
+  max-width: 460px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ═══════════════════════════════════════
@@ -167,15 +203,11 @@ body::before {
    ═══════════════════════════════════════ */
 
 .lang-toggle {
-  position: absolute;
-  top: var(--space-md);
-  inset-inline-end: var(--space-md);
   display: flex;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
   overflow: hidden;
-  animation: fadeSlideUp 0.6s ease 0.1s both;
 }
 
 .lang-toggle__btn {
@@ -218,6 +250,11 @@ body::before {
   gap: var(--space-sm);
   text-align: start;
   animation: fadeSlideUp 0.6s ease 0.12s both;
+}
+
+.beta-banner--footer {
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .beta-banner__badge {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CONTACT_EMAIL } from "./data/termsOfUse";
 import { FooterLegal, ReportIssueModal, TermsInline, TermsModal } from "./TermsUi";
+import linkCheckLogo from "../Logo LinkCheck.png";
 
 /* ═══════════════════════════════════════
    TYPES
@@ -506,36 +507,33 @@ export function App() {
         }}
       />
 
-      {/* Language toggle */}
-      <div className="lang-toggle">
-        <button
-          type="button"
-          className={`lang-toggle__btn ${language === "en" ? "lang-toggle__btn--active" : ""}`}
-          onClick={() => setLanguage("en")}
-        >
-          EN
-        </button>
-        <button
-          type="button"
-          className={`lang-toggle__btn ${language === "he" ? "lang-toggle__btn--active" : ""}`}
-          onClick={() => setLanguage("he")}
-        >
-          עב
-        </button>
-      </div>
-
-      <div className="beta-banner" role="status">
-        <span className="beta-banner__badge">{t.betaBadge}</span>
-        <p className="beta-banner__text">{t.betaNotice}</p>
+      {/* Top rail: Erlix + language */}
+      <div className="top-rail">
+        <img src="/erlix-logo.png" alt="Erlix" className="top-rail__erlix-logo" />
+        <div className="lang-toggle">
+          <button
+            type="button"
+            className={`lang-toggle__btn ${language === "en" ? "lang-toggle__btn--active" : ""}`}
+            onClick={() => setLanguage("en")}
+          >
+            EN
+          </button>
+          <button
+            type="button"
+            className={`lang-toggle__btn ${language === "he" ? "lang-toggle__btn--active" : ""}`}
+            onClick={() => setLanguage("he")}
+          >
+            עב
+          </button>
+        </div>
       </div>
 
       {/* Header */}
       <header className="header">
         <div className="header__logo-wrap">
           <div className="header__logo-glow" />
-          <img src="/logo.png" alt="Erlix" className="header__logo" />
+          <img src={linkCheckLogo} alt="LinkCheck" className="header__logo header__logo--linkcheck" />
         </div>
-        <h1 className="header__title">LinkCheck</h1>
         <p className="header__subtitle">{t.subtitle}</p>
       </header>
 
@@ -701,6 +699,11 @@ export function App() {
           </div>
         )}
       </section>
+
+      <div className="beta-banner beta-banner--footer" role="status">
+        <span className="beta-banner__badge">{t.betaBadge}</span>
+        <p className="beta-banner__text">{t.betaNotice}</p>
+      </div>
 
       {/* Footer */}
       <footer className="footer">
