@@ -113,6 +113,11 @@ body::before {
   animation: fadeSlideUp 0.6s ease 0.06s both;
 }
 
+.top-rail__home-link {
+  display: inline-flex;
+  text-decoration: none;
+}
+
 .top-rail__erlix-logo {
   height: 28px;
   width: auto;
@@ -139,6 +144,10 @@ body::before {
   align-items: center;
   justify-content: center;
   margin-bottom: 0;
+}
+
+.header__logo-link {
+  text-decoration: none;
 }
 
 .header__logo-glow {

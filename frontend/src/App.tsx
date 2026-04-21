@@ -666,7 +666,9 @@ export function App() {
 
       {/* Top rail: Erlix + language */}
       <div className="top-rail">
-        <img src="/erlix-logo.png" alt="Erlix" className="top-rail__erlix-logo" />
+        <a href="https://erlix.net/" className="top-rail__home-link" aria-label="Erlix home page">
+          <img src="/erlix-logo.png" alt="Erlix" className="top-rail__erlix-logo" />
+        </a>
         <div className="lang-toggle">
           <button
             type="button"
@@ -687,10 +689,10 @@ export function App() {
 
       {/* Header */}
       <header className="header">
-        <div className="header__logo-wrap">
+        <a href="https://erlix.net/" className="header__logo-wrap header__logo-link" aria-label="Erlix home page">
           <div className="header__logo-glow" />
           <img src={linkCheckLogo} alt="LinkCheck" className="header__logo header__logo--linkcheck" />
-        </div>
+        </a>
         <p className="header__subtitle">{t.subtitle}</p>
       </header>
 
