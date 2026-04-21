@@ -5,6 +5,9 @@ import os
 import re
 import smtplib
 import threading
+import io
+import contextlib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import unicodedata
 import base64
 import ssl
@@ -15,6 +18,7 @@ from email.message import EmailMessage
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urljoin, unquote
+from functools import lru_cache
 
 import requests
 import urllib3
@@ -50,9 +54,13 @@ limiter = Limiter(
 
 LIVE_JOB_TIMEOUT_SEC = int(os.getenv("LIVE_JOB_TIMEOUT_SEC", "20"))
 LIVE_CACHE_TTL_SEC = int(os.getenv("LIVE_CACHE_TTL_SEC", "180"))
+EXTERNAL_INTEL_TIMEOUT_SEC = int(os.getenv("EXTERNAL_INTEL_TIMEOUT_SEC", "4"))
+ANALYSIS_FETCH_TIMEOUT_SEC = int(os.getenv("ANALYSIS_FETCH_TIMEOUT_SEC", "4"))
+WHOIS_TIMEOUT_SEC = float(os.getenv("WHOIS_TIMEOUT_SEC", "2.5"))
 LIVE_ANALYSIS_JOBS: dict[str, dict] = {}
 LIVE_ANALYSIS_CACHE: dict[str, dict] = {}
 LIVE_LOCK = threading.Lock()
+WHOIS_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 
 def _production_mode() -> bool:
@@ -1423,7 +1431,7 @@ def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
         report_resp = requests.get(
             f"https://www.virustotal.com/api/v3/urls/{url_id}",
             headers=headers,
-            timeout=8
+            timeout=EXTERNAL_INTEL_TIMEOUT_SEC
         )
 
         if report_resp.status_code == 404:
@@ -1431,7 +1439,7 @@ def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
                 "https://www.virustotal.com/api/v3/urls",
                 headers=headers,
                 data={"url": url},
-                timeout=8
+                timeout=EXTERNAL_INTEL_TIMEOUT_SEC
             )
             if submit_resp.ok:
                 return 0, ["vt_pending"], intel_note_key
@@ -1471,7 +1479,7 @@ def query_urlscan(url: str, api_key: str) -> tuple[int, list[str], str]:
             "https://urlscan.io/api/v1/search/",
             headers=headers,
             params={"q": f'page.url:"{url}"', "size": 1},
-            timeout=8
+            timeout=EXTERNAL_INTEL_TIMEOUT_SEC
         )
         if search_resp.ok:
             results = search_resp.json().get("results", [])
@@ -1490,7 +1498,7 @@ def query_urlscan(url: str, api_key: str) -> tuple[int, list[str], str]:
             "https://urlscan.io/api/v1/scan/",
             headers=headers,
             json={"url": url, "visibility": "public"},
-            timeout=8
+            timeout=EXTERNAL_INTEL_TIMEOUT_SEC
         )
         if submit_resp.ok:
             return 0, ["urlscan_pending"], "intel_configured"
@@ -1522,9 +1530,9 @@ def query_google_safe_browsing(url: str, api_key: str) -> tuple[int, list[str], 
         },
     }
     try:
-        resp = requests.post(endpoint, json=payload, timeout=8)
+        resp = requests.post(endpoint, json=payload, timeout=EXTERNAL_INTEL_TIMEOUT_SEC)
         if not resp.ok:
-            return 0, [], "gsb_unavailable"
+            return 0, ["gsb_unavailable"], "gsb_unavailable"
         body = resp.json() if resp.text else {}
         matches = body.get("matches", []) or []
         if not matches:
@@ -1534,7 +1542,7 @@ def query_google_safe_browsing(url: str, api_key: str) -> tuple[int, list[str], 
             return 50, ["gsb_malicious"], "intel_configured"
         return 20, ["gsb_suspicious"], "intel_configured"
     except Exception:
-        return 0, [], "gsb_unavailable"
+        return 0, ["gsb_unavailable"], "gsb_unavailable"
 
 
 def dns_resolves(hostname: str) -> bool:
@@ -1628,7 +1636,7 @@ def _fetch_page_text_for_analysis(url: str) -> str:
             current = normalized
             resp = None
             for _ in range(4):
-                resp = _redirect_session_get(session, current, headers=headers, timeout=8)
+                resp = _redirect_session_get(session, current, headers=headers, timeout=ANALYSIS_FETCH_TIMEOUT_SEC)
                 if resp.status_code not in (301, 302, 303, 307, 308):
                     break
                 loc = resp.headers.get("Location")
@@ -1648,11 +1656,11 @@ def _fetch_page_text_for_analysis(url: str) -> str:
         return ""
 
 
-def _fetch_html_for_analysis(url: str) -> tuple[str, str]:
-    """Return (html, final_url) after a few safe redirects."""
+def _fetch_html_for_analysis(url: str) -> tuple[str, str, int | None]:
+    """Return (html, final_url, status_code) after a few safe redirects."""
     normalized = normalize_url_for_checks(url)
     if not normalized or not _safe_url_for_server_redirect(normalized):
-        return "", normalized
+        return "", normalized, None
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1665,7 +1673,7 @@ def _fetch_html_for_analysis(url: str) -> tuple[str, str]:
             current = normalized
             resp = None
             for _ in range(5):
-                resp = _redirect_session_get(session, current, headers=headers, timeout=8)
+                resp = _redirect_session_get(session, current, headers=headers, timeout=ANALYSIS_FETCH_TIMEOUT_SEC)
                 if resp.status_code not in (301, 302, 303, 307, 308):
                     break
                 loc = resp.headers.get("Location")
@@ -1673,16 +1681,20 @@ def _fetch_html_for_analysis(url: str) -> tuple[str, str]:
                     break
                 next_url = urljoin(current, loc.strip())
                 if not _safe_url_for_server_redirect(next_url):
-                    return "", current
+                    return "", current, None
                 current = next_url
             if resp is None:
-                return "", current
+                return "", current, None
+            status_code = int(resp.status_code)
+            # Do not infer "single-page" from forbidden/challenge/error pages.
+            if status_code >= 400:
+                return "", current, status_code
             ct = (resp.headers.get("Content-Type") or "").lower()
             if "text/html" not in ct:
-                return "", current
-            return (resp.text or "")[:200000], current
+                return "", current, status_code
+            return (resp.text or "")[:200000], current, status_code
     except Exception:
-        return "", normalized
+        return "", normalized, None
 
 
 def analyze_site_structure_signal(url: str) -> tuple[int, list[str], dict]:
@@ -1690,9 +1702,9 @@ def analyze_site_structure_signal(url: str) -> tuple[int, list[str], dict]:
     Structural signal: very few internal pages can indicate throwaway phishing sites.
     Not a proof by itself, but a strong supporting signal.
     """
-    html, final_url = _fetch_html_for_analysis(url)
+    html, final_url, status_code = _fetch_html_for_analysis(url)
     if not html:
-        return 0, [], {}
+        return 0, [], {"structure_fetch_status": status_code}
 
     p = urlparse(final_url)
     host = (p.hostname or "").lower()
@@ -1722,7 +1734,7 @@ def analyze_site_structure_signal(url: str) -> tuple[int, list[str], dict]:
     nav_hits = count_term_hits(lowered, nav_terms)
 
     internal_count = len(internal_paths)
-    context = {"internal_pages_found": internal_count}
+    context = {"internal_pages_found": internal_count, "structure_fetch_status": status_code}
     if internal_count <= 1 and nav_hits == 0:
         return 30, ["single_page_site"], context
     return 0, [], context
@@ -1877,9 +1889,17 @@ def analyze_page_language_signals(url: str) -> tuple[int, list[str], dict]:
     return min(45, score), reasons, context
 
 
+@lru_cache(maxsize=2048)
 def domain_age_days(hostname: str) -> int | None:
     try:
-        data = whois.whois(hostname)
+        def _lookup() -> object:
+            # python-whois can print low-level socket timeout messages to stdout/stderr.
+            # Capture those writes so server logs stay clean.
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return whois.whois(hostname)
+
+        fut = WHOIS_EXECUTOR.submit(_lookup)
+        data = fut.result(timeout=WHOIS_TIMEOUT_SEC)
         created = data.creation_date
         if isinstance(created, list):
             created = created[0] if created else None
@@ -1889,6 +1909,8 @@ def domain_age_days(hostname: str) -> int | None:
             created = created.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         return max(0, (now - created).days)
+    except FuturesTimeoutError:
+        return None
     except Exception:
         return None
 
@@ -1915,6 +1937,39 @@ def build_explanation(language: str, risk_level: str, reason_keys: list[str], co
     if risk_level == "Medium":
         return t(language, "explain_medium")
     return t(language, "explain_not_high")
+
+
+def _summarize_url_risk(url: str) -> tuple[int, str, list[str]]:
+    """
+    Lightweight risk summary for a standalone URL.
+    Used for side-by-side domain-vs-link visibility in UI.
+    """
+    if not url:
+        return 0, "Low", []
+    local_score, local_keys, _ = analyze_url(url)
+    total_score = local_score
+    reason_keys = list(local_keys)
+
+    if os.getenv("VIRUSTOTAL_API_KEY"):
+        s, k, _ = query_virustotal(url, os.getenv("VIRUSTOTAL_API_KEY", ""))
+        total_score += s
+        reason_keys.extend(k)
+    if os.getenv("URLSCAN_API_KEY"):
+        s, k, _ = query_urlscan(url, os.getenv("URLSCAN_API_KEY", ""))
+        total_score += s
+        reason_keys.extend(k)
+    if os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
+        s, k, _ = query_google_safe_browsing(url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", ""))
+        total_score += s
+        reason_keys.extend(k)
+
+    total_score = min(100, total_score)
+    reason_keys = list(dict.fromkeys(reason_keys))
+    risk = classify_risk(total_score)
+    if any(k in reason_keys for k in {"vt_malicious", "gsb_malicious", "urlscan_malicious", "brand_mismatch"}):
+        risk = "High"
+        total_score = max(total_score, 85)
+    return total_score, risk, reason_keys
 
 
 def _severity_rank(level: str) -> int:
@@ -2287,12 +2342,17 @@ def analyze():
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
     gsb_configured = bool(os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"))
-    vt_clean = not vt_configured or "vt_clean" in intel_reason_keys
+    vt_clean = (
+        (not vt_configured)
+        or ("vt_clean" in intel_reason_keys)
+        or ("vt_single_vendor_flag" in intel_reason_keys)
+    )
     vt_checked = vt_configured
     urlscan_clean = not urlscan_configured or "urlscan_clean" in intel_reason_keys
     urlscan_checked = urlscan_configured
-    gsb_clean = not gsb_configured or "gsb_clean" in intel_reason_keys
-    gsb_checked = gsb_configured
+    gsb_clean = "gsb_clean" in intel_reason_keys
+    gsb_unavailable = "gsb_unavailable" in intel_reason_keys
+    gsb_checked = gsb_configured and not gsb_unavailable
     url_only_warning_keys = [key for key in url_reason_keys if key not in NON_WARNING_LOCAL_KEYS]
     no_url_warnings = len(url_only_warning_keys) == 0
     domain_old_enough = age_days is not None and age_days >= 180
@@ -2323,7 +2383,7 @@ def analyze():
     # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
     vt_passes = (not vt_checked) or vt_clean
     urlscan_passes = (not urlscan_checked) or urlscan_clean
-    gsb_passes = (not gsb_checked) or gsb_clean
+    gsb_passes = (not gsb_configured) or gsb_unavailable or gsb_clean
     message_passes = not any(k in MESSAGE_WARNING_KEYS for k in reason_keys)
     page_passes = (page_status_code is None) or page_exists
     core_pass = (
@@ -2355,6 +2415,38 @@ def analyze():
         if "insufficient_trust_signals" not in reason_keys:
             reason_keys.append("insufficient_trust_signals")
 
+    weak_only_keys = {
+        "single_page_site",
+        "vt_single_vendor_flag",
+        "urlscan_pending",
+        "insufficient_trust_signals",
+        "short_link_expanded",
+        "short_link_destination_blocked",
+        "tld_country_notice",
+        "gsb_unavailable",
+        "vt_clean",
+        "urlscan_clean",
+        "gsb_clean",
+    }
+    hard_risk_keys = {
+        "brand_mismatch",
+        "lookalike_brand",
+        "at_sign_userinfo",
+        "vt_malicious",
+        "gsb_malicious",
+        "urlscan_malicious",
+        "ai_subdomain_impersonation_combo",
+    }
+    force_low_for_weak_only = False
+    effective_keys = {k for k in reason_keys if k not in {"insufficient_trust_signals"}}
+    if effective_keys and effective_keys.issubset(weak_only_keys) and not any(k in reason_keys for k in hard_risk_keys):
+        # Weak/ambiguous signals alone should not force medium-risk banners.
+        total_score = min(total_score, 20)
+        reason_keys = [k for k in reason_keys if k != "insufficient_trust_signals"]
+        failed_green_checks = [item for item in failed_green_checks if item.get("key") != "no_local_warnings"]
+        force_low_for_weak_only = True
+        is_green_safe = True
+
     reasons = [t(language, key) for key in reason_keys]
     intel_note = ""
     if intel_key == "intel_configured":
@@ -2366,7 +2458,9 @@ def analyze():
         reasons = [t(language, "safe_now")]
 
     # Green is granted only when all required trust signals pass.
-    if is_green_safe:
+    if force_low_for_weak_only:
+        risk_level = "Low"
+    elif is_green_safe:
         risk_level = "Low"
     else:
         risk_level = "High" if total_score > 60 else "Medium"
@@ -2376,6 +2470,25 @@ def analyze():
         risk_level = "High"
     if social_engineering_hit and potentially_misleading_subdomain:
         risk_level = "High"
+
+    domain_verdict = {}
+    if registrable_domain:
+        domain_url = f"https://{registrable_domain}"
+        domain_score, domain_risk_level, domain_reason_keys = _summarize_url_risk(domain_url)
+        domain_verdict = {
+            "url": domain_url,
+            "risk_level": domain_risk_level,
+            "score": domain_score,
+            "is_safe": domain_risk_level == "Low",
+            "reason_keys": domain_reason_keys,
+        }
+    link_verdict = {
+        "url": url_to_check,
+        "risk_level": risk_level,
+        "score": total_score,
+        "is_safe": risk_level == "Low",
+        "reason_keys": list(dict.fromkeys(reason_keys)),
+    }
 
     return jsonify(
         {
@@ -2399,6 +2512,8 @@ def analyze():
             "domain_tld": url_context.get("domain_tld", ""),
             "tld_country_code": url_context.get("tld_country_code", ""),
             "page_audience": url_context.get("page_audience", ""),
+            "domain_verdict": domain_verdict,
+            "link_verdict": link_verdict,
         }
     )
 

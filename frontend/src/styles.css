@@ -397,6 +397,12 @@ body::before {
   font-size: 1.2em;
 }
 
+.scan-hint {
+  margin: 8px 2px 0;
+  font-size: 0.86rem;
+  color: var(--color-text-soft);
+}
+
 /* ═══════════════════════════════════════
    LOADING STATE
    ═══════════════════════════════════════ */
