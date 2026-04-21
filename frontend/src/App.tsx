@@ -368,7 +368,7 @@ const urlRegex = /^(https?:\/\/)?([^\s/$.?#].[^\s]*)$/i;
 const detectedLanguage: Language = navigator.language.toLowerCase().startsWith("en") ? "en" : "he";
 const defaultApiBaseUrl =
   typeof window !== "undefined"
-    ? "/api";
+    ? "/api"
     : "http://localhost:5000";
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).replace(/\/+$/, "");
 
