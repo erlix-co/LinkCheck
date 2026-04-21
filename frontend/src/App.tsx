@@ -113,6 +113,8 @@ const translations = {
     domainVerdictWarn: "The main domain needs caution.",
     linkVerdictSafe: "This specific link looks safe.",
     linkVerdictWarn: "This specific link needs caution.",
+    fullLinksToggle: "Show full links",
+    fullLinksTitle: "Full links",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -187,6 +189,8 @@ const translations = {
     domainVerdictWarn: "הדומיין הראשי דורש זהירות.",
     linkVerdictSafe: "הקישור הספציפי נראה בטוח.",
     linkVerdictWarn: "הקישור הספציפי דורש זהירות.",
+    fullLinksToggle: "הצג קישורים מלאים",
+    fullLinksTitle: "קישורים מלאים",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -798,7 +802,6 @@ export function App() {
                   <span className="reason-item__icon">{domainVerdict?.risk_level === "Low" ? "\u2705" : "\u26A0\uFE0F"}</span>
                   <span>
                     {domainVerdict?.risk_level === "Low" ? t.domainVerdictSafe : t.domainVerdictWarn}
-                    {domainVerdict?.url ? ` (${domainVerdict.url})` : ""}
                   </span>
                 </div>
                 <div className="reason-item">
@@ -807,9 +810,30 @@ export function App() {
                   </span>
                   <span>
                     {linkVerdict?.risk_level === "Low" ? t.linkVerdictSafe : t.linkVerdictWarn}
-                    {linkVerdict?.url ? ` (${linkVerdict.url})` : ""}
                   </span>
                 </div>
+                {(domainVerdict?.url || linkVerdict?.url) && (
+                  <details className="redirect-details split-links-details">
+                    <summary className="redirect-details__summary">{t.fullLinksToggle}</summary>
+                    <div className="redirect-window split-links-window" role="region" aria-label={t.fullLinksTitle}>
+                      <div className="redirect-window__title">{t.fullLinksTitle}</div>
+                      <div className="redirect-window__content split-links-window__content">
+                        {domainVerdict?.url && (
+                          <div className="split-links-row">
+                            <span className="split-links-row__label">Domain:</span>
+                            <span className="split-links-row__url">{domainVerdict.url}</span>
+                          </div>
+                        )}
+                        {linkVerdict?.url && (
+                          <div className="split-links-row">
+                            <span className="split-links-row__label">Link:</span>
+                            <span className="split-links-row__url">{linkVerdict.url}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </details>
+                )}
               </div>
             )}
 

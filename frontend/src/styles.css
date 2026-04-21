@@ -830,6 +830,39 @@ body::before {
   margin-top: 2px;
 }
 
+.split-links-details {
+  margin-top: 6px;
+}
+
+.split-links-window__content {
+  max-height: 140px;
+}
+
+.split-links-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.split-links-row:last-child {
+  margin-bottom: 0;
+}
+
+.split-links-row__label {
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+}
+
+.split-links-row__url {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  direction: ltr;
+  unicode-bidi: plaintext;
+  word-break: break-all;
+}
+
 /* Green checks */
 .checks-grid {
   display: grid;

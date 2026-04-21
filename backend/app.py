@@ -17,7 +17,7 @@ import uuid
 from email.message import EmailMessage
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from urllib.parse import urlparse, urljoin, unquote
+from urllib.parse import urlparse, urljoin, unquote, parse_qsl, urlencode, urlunparse
 from functools import lru_cache
 
 import requests
@@ -852,6 +852,25 @@ def decode_url_for_analysis(url: str) -> str:
     if not normalized:
         return normalized
 
+
+def canonicalize_url_for_external_intel(url: str) -> str:
+    """
+    Build stable URL form for external reputation APIs.
+    Keeps same resource but normalizes query ordering and strips fragment.
+    """
+    normalized = normalize_url_for_checks(url)
+    if not normalized:
+        return ""
+    try:
+        p = urlparse(normalized)
+        query_pairs = parse_qsl(p.query, keep_blank_values=True)
+        query_pairs.sort(key=lambda kv: (kv[0], kv[1]))
+        stable_query = urlencode(query_pairs, doseq=True)
+        stable = p._replace(query=stable_query, fragment="")
+        return urlunparse(stable)
+    except Exception:
+        return normalized
+
     decoded = normalized
     for _ in range(2):
         next_value = unquote(decoded)
@@ -1108,7 +1127,7 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
 
     # Weak brand hint is allowed only when registrable owner label is different.
     # This avoids false positives on legitimate country domains like amazon.de.
-    brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in lower_url), "")
+    brand_hit = next((pattern for pattern in BRAND_PATTERNS if pattern in hostname), "")
     if brand_hit and "brand_mismatch" not in reasons:
         canonical_domains = BRAND_CANONICAL_DOMAINS.get(brand_hit, set())
         if registrable_domain in canonical_domains:
@@ -1178,13 +1197,14 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         score += 100
         reasons.append("at_sign_userinfo")
 
-    # Rule: very long URLs often hide malicious intent.
-    if len(normalized_url) > 75:
+    # Rule: unusually long host/domain labels can be suspicious.
+    # Do not score long query/path strings by themselves.
+    if len(hostname) > 45:
         score += 10
         reasons.append("long_url")
 
-    # Rule: many hyphens can indicate deceptive domain naming.
-    if normalized_url.count("-") >= 3 and not is_brand_canonical_domain:
+    # Rule: many hyphens in the host/domain (not query params) can indicate deception.
+    if hostname.count("-") >= 3 and not is_brand_canonical_domain:
         score += 10
         reasons.append("many_hyphens")
 
@@ -1442,8 +1462,20 @@ def query_virustotal(url: str, api_key: str) -> tuple[int, list[str], str]:
                 timeout=EXTERNAL_INTEL_TIMEOUT_SEC
             )
             if submit_resp.ok:
-                return 0, ["vt_pending"], intel_note_key
-            return 0, [], "vt_unavailable"
+                # Retry once quickly to reduce "pending" mismatch for short-link vs final-link checks.
+                try:
+                    time.sleep(0.35)
+                    report_resp = requests.get(
+                        f"https://www.virustotal.com/api/v3/urls/{url_id}",
+                        headers=headers,
+                        timeout=EXTERNAL_INTEL_TIMEOUT_SEC
+                    )
+                except Exception:
+                    return 0, ["vt_pending"], intel_note_key
+                if not report_resp.ok:
+                    return 0, ["vt_pending"], intel_note_key
+            else:
+                return 0, [], "vt_unavailable"
 
         if not report_resp.ok:
             return 0, [], "vt_unavailable"
@@ -1949,17 +1981,18 @@ def _summarize_url_risk(url: str) -> tuple[int, str, list[str]]:
     local_score, local_keys, _ = analyze_url(url)
     total_score = local_score
     reason_keys = list(local_keys)
+    intel_url = canonicalize_url_for_external_intel(url)
 
     if os.getenv("VIRUSTOTAL_API_KEY"):
-        s, k, _ = query_virustotal(url, os.getenv("VIRUSTOTAL_API_KEY", ""))
+        s, k, _ = query_virustotal(intel_url or url, os.getenv("VIRUSTOTAL_API_KEY", ""))
         total_score += s
         reason_keys.extend(k)
     if os.getenv("URLSCAN_API_KEY"):
-        s, k, _ = query_urlscan(url, os.getenv("URLSCAN_API_KEY", ""))
+        s, k, _ = query_urlscan(intel_url or url, os.getenv("URLSCAN_API_KEY", ""))
         total_score += s
         reason_keys.extend(k)
     if os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
-        s, k, _ = query_google_safe_browsing(url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", ""))
+        s, k, _ = query_google_safe_browsing(intel_url or url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", ""))
         total_score += s
         reason_keys.extend(k)
 
@@ -2240,29 +2273,44 @@ def analyze():
     intel_score = 0
     intel_reason_keys: list[str] = []
 
-    if url_to_check and os.getenv("VIRUSTOTAL_API_KEY"):
+    intel_url = canonicalize_url_for_external_intel(url_to_check)
+
+    if intel_url and os.getenv("VIRUSTOTAL_API_KEY"):
         vt_score, vt_reason_keys, vt_note_key = query_virustotal(
-            url_to_check, os.getenv("VIRUSTOTAL_API_KEY", "")
+            intel_url, os.getenv("VIRUSTOTAL_API_KEY", "")
         )
         intel_score += vt_score
         intel_reason_keys.extend(vt_reason_keys)
         intel_key = vt_note_key
 
-    if url_to_check and os.getenv("URLSCAN_API_KEY"):
+    if intel_url and os.getenv("URLSCAN_API_KEY"):
         us_score, us_reason_keys, us_note_key = query_urlscan(
-            url_to_check, os.getenv("URLSCAN_API_KEY", "")
+            intel_url, os.getenv("URLSCAN_API_KEY", "")
         )
         intel_score += us_score
         intel_reason_keys.extend(us_reason_keys)
         intel_key = us_note_key
 
-    if url_to_check and os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
+    if intel_url and os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
         gsb_score, gsb_reason_keys, gsb_note_key = query_google_safe_browsing(
-            url_to_check, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
+            intel_url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
         )
         intel_score += gsb_score
         intel_reason_keys.extend(gsb_reason_keys)
         intel_key = gsb_note_key
+
+    # Balance lexical "long URL" signal:
+    # if it is the only local warning and external intel is clean/unavailable,
+    # do not keep medium-risk just because of length.
+    local_warning_keys = [k for k in url_reason_keys if k not in NON_WARNING_LOCAL_KEYS]
+    only_long_url_local = local_warning_keys == ["long_url"]
+    intel_has_bad_signal = any(
+        k in intel_reason_keys
+        for k in {"vt_malicious", "vt_suspicious", "urlscan_malicious", "urlscan_suspicious", "gsb_malicious", "gsb_suspicious"}
+    )
+    if only_long_url_local and not intel_has_bad_signal:
+        url_reason_keys = [k for k in url_reason_keys if k != "long_url"]
+        url_score = max(0, url_score - 10)
 
     # Message analysis always contributes at a baseline weight, even when URL heuristics look clean.
     # This keeps social-engineering text signals meaningful without over-amplifying false positives.
