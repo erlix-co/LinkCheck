@@ -36,6 +36,20 @@ type AnalysisResponse = {
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
+  domain_verdict?: {
+    url?: string;
+    risk_level?: RiskLevel;
+    score?: number;
+    is_safe?: boolean;
+    reason_keys?: string[];
+  };
+  link_verdict?: {
+    url?: string;
+    risk_level?: RiskLevel;
+    score?: number;
+    is_safe?: boolean;
+    reason_keys?: string[];
+  };
 };
 
 type LiveStep = {
@@ -72,6 +86,7 @@ const translations = {
     urlPlaceholder: "https://example.com",
     scan: "Scan Now",
     scanning: "Scanning...",
+    scanHint: "Recommended: run a second check after a few seconds to confirm result stability.",
     needInput: "Please enter a link or paste a message.",
     invalidUrl: "This doesn't look like a valid link.",
     safe: "Looks Safe",
@@ -93,6 +108,11 @@ const translations = {
     locationUnknown: "Unknown",
     reasons: "What affected the result",
     greenChecks: "Trust and safety checks",
+    splitVerdictTitle: "Domain vs specific link",
+    domainVerdictSafe: "The main domain looks safe.",
+    domainVerdictWarn: "The main domain needs caution.",
+    linkVerdictSafe: "This specific link looks safe.",
+    linkVerdictWarn: "This specific link needs caution.",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -140,6 +160,7 @@ const translations = {
     urlPlaceholder: "https://example.com",
     scan: "בדיקה",
     scanning: "בודק...",
+    scanHint: "מומלץ לבצע בדיקה חוזרת אחרי כמה שניות כדי לוודא יציבות תוצאה.",
     needInput: "יש להזין קישור או הודעה.",
     invalidUrl: "זה לא נראה כמו קישור תקין.",
     safe: "נראה בטוח",
@@ -161,6 +182,11 @@ const translations = {
     locationUnknown: "לא ידוע",
     reasons: "מה השפיע על התוצאה",
     greenChecks: "בדיקות אמון ובטיחות",
+    splitVerdictTitle: "דומיין ראשי מול קישור ספציפי",
+    domainVerdictSafe: "הדומיין הראשי נראה בטוח.",
+    domainVerdictWarn: "הדומיין הראשי דורש זהירות.",
+    linkVerdictSafe: "הקישור הספציפי נראה בטוח.",
+    linkVerdictWarn: "הקישור הספציפי דורש זהירות.",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -559,8 +585,10 @@ export function App() {
   const hasRedirect = result?.redirect_chain && result.redirect_chain.length > 1;
   const hasUrlDiff = result?.submitted_url && result.submitted_url !== result.analyzed_url;
   const knownSiteCountry = result ? countryNameFromTld(result) : "";
+  const domainTld = (result?.domain_tld || "").trim().toLowerCase();
+  const hideLocationBanner = domainTld === "com";
   const showSiteLocationBanner =
-    Boolean(result) && (Boolean(knownSiteCountry) || result?.is_green_safe === false);
+    Boolean(result) && !hideLocationBanner && (Boolean(knownSiteCountry) || result?.is_green_safe === false);
   const siteLocationText = knownSiteCountry || t.locationUnknown;
   const analyzedHostname = (() => {
     try {
@@ -574,7 +602,12 @@ export function App() {
     const reg = (result?.registrable_domain || "").toLowerCase();
     if (!analyzedHostname || !reg) return "";
     if (!analyzedHostname.endsWith(`.${reg}`)) return "";
-    return analyzedHostname.slice(0, -(reg.length + 1));
+    const raw = analyzedHostname.slice(0, -(reg.length + 1));
+    const withoutWww = raw
+      .split(".")
+      .filter((part) => part && !/^www\d*$/i.test(part))
+      .join(".");
+    return withoutWww;
   })();
   const hasSubdomainFocus = Boolean(result?.has_subdomains && result?.registrable_domain && subdomainPart);
   const hasMisleadingSubdomainAlert = Boolean(
@@ -589,6 +622,8 @@ export function App() {
       result?.risk_level === "High" ||
       (liveMeta.stage >= 2 && result?.risk_level !== "Low")
     );
+  const domainVerdict = result?.domain_verdict;
+  const linkVerdict = result?.link_verdict;
 
   return (
     <main className="page" dir={language === "he" ? "rtl" : "ltr"} lang={language}>
@@ -688,6 +723,7 @@ export function App() {
           <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
           {loading ? t.scanning : t.scan}
         </button>
+        <p className="scan-hint">{t.scanHint}</p>
 
         <TermsInline
           lang={language}
@@ -754,6 +790,28 @@ export function App() {
                 </div>
               </div>
             </div>
+
+            {(domainVerdict?.url || linkVerdict?.url) && (
+              <div className="result-section">
+                <div className="result-section__title">{t.splitVerdictTitle}</div>
+                <div className="reason-item">
+                  <span className="reason-item__icon">{domainVerdict?.risk_level === "Low" ? "\u2705" : "\u26A0\uFE0F"}</span>
+                  <span>
+                    {domainVerdict?.risk_level === "Low" ? t.domainVerdictSafe : t.domainVerdictWarn}
+                    {domainVerdict?.url ? ` (${domainVerdict.url})` : ""}
+                  </span>
+                </div>
+                <div className="reason-item">
+                  <span className="reason-item__icon">
+                    {linkVerdict?.risk_level === "Low" ? "\u2705" : linkVerdict?.risk_level === "High" ? "\u26D4" : "\u26A0\uFE0F"}
+                  </span>
+                  <span>
+                    {linkVerdict?.risk_level === "Low" ? t.linkVerdictSafe : t.linkVerdictWarn}
+                    {linkVerdict?.url ? ` (${linkVerdict.url})` : ""}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* URL info */}
             {(hasUrlDiff || hasRedirect || !!result?.analyzed_url || !!result?.submitted_url) && (
