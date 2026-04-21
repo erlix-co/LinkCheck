@@ -11,7 +11,7 @@ export type TermsSection = {
 export const TERMS_VERSION = "1";
 
 /** Primary contact for legal, privacy, and bug reports */
-export const CONTACT_EMAIL = "erlix.co@gmail.com";
+export const CONTACT_EMAIL = "ierlich@gmail.com";
 
 export const termsSections: TermsSection[] = [
   {
@@ -161,10 +161,10 @@ export const termsSections: TermsSection[] = [
     title: { he: "10. יצירת קשר", en: "10. Contact" },
     body: {
       he: [
-        "לשאלות בנוגע לתנאים או לפרטיות: erlix.co@gmail.com",
+        "לשאלות בנוגע לתנאים או לפרטיות: ierlich@gmail.com",
       ],
       en: [
-        "Questions about these Terms or privacy: erlix.co@gmail.com",
+        "Questions about these Terms or privacy: ierlich@gmail.com",
       ],
     },
   },
