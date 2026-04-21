@@ -101,7 +101,7 @@ def _internal_error(_e):
 @app.get("/.well-known/security.txt")
 def security_txt():
     """RFC 9116 security disclosure contact (threat modeling / disclosure policy)."""
-    contact = (os.getenv("SECURITY_CONTACT_EMAIL") or "erlix.co@gmail.com").strip()
+    contact = (os.getenv("SECURITY_CONTACT_EMAIL") or "ierlich@gmail.com").strip()
     body = (
         f"Contact: mailto:{contact}\n"
         "Preferred-Languages: en, he\n"
@@ -2753,7 +2753,7 @@ def send_issue_report_email(
     password = os.getenv("SMTP_PASSWORD", "").strip()
     use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
     mail_from = os.getenv("REPORT_FROM_EMAIL", user).strip()
-    mail_to = os.getenv("REPORT_TO_EMAIL", "erlix.co@gmail.com").strip()
+    mail_to = os.getenv("REPORT_TO_EMAIL", "ierlich@gmail.com").strip()
 
     ctx = _format_checked_scan_context(url_field, message_field)
     ctx_block = (
