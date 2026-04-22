@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CONTACT_EMAIL } from "./data/termsOfUse";
 import { FooterLegal, ReportIssueModal, TermsInline, TermsModal } from "./TermsUi";
-import linkCheckLogo from "../Logo LinkCheck.png";
+import linkCheckLogo from "../Logo LinkCheck smal.png";
 
 /* ═══════════════════════════════════════
    TYPES
@@ -418,6 +418,11 @@ export function App() {
   const riskDesc = (level: RiskLevel) =>
     level === "Low" ? t.safeDesc : level === "Medium" ? t.mediumDesc : t.highDesc;
 
+  const strongerRiskLevel = (a: RiskLevel, b: RiskLevel): RiskLevel => {
+    const rank: Record<RiskLevel, number> = { Low: 0, Medium: 1, High: 2 };
+    return rank[a] >= rank[b] ? a : b;
+  };
+
   const getGreenCheckLabel = (check: GreenCheck): string => {
     if (check.key === "domain_age_180d") {
       const base = language === "he" ? "ותק האתר מעל 180 יום" : "Website age over 180 days";
@@ -546,7 +551,10 @@ export function App() {
         setLoading(false);
 
         if (!startData.final && startData.analysis_id) {
-          for (let i = 0; i < 12; i += 1) {
+          let gotFinal = false;
+          let latestLiveRisk = (startData.risk_level || "Low") as RiskLevel;
+          const pollStartedAt = Date.now();
+          for (let i = 0; i < 30; i += 1) {
             await new Promise((resolve) => setTimeout(resolve, 2300));
             if (runToken !== pollTokenRef.current) return;
             const statusResp = await fetch(`${apiBaseUrl}/analyze/live/status/${startData.analysis_id}`);
@@ -563,9 +571,47 @@ export function App() {
               steps: (statusData.steps || []) as LiveStep[],
             });
             setResult((statusData.result || null) as AnalysisResponse | null);
+            latestLiveRisk = (statusData.risk_level || latestLiveRisk) as RiskLevel;
             if (statusData.final) {
+              gotFinal = true;
               setCountdownSec(0);
               break;
+            }
+            if (Date.now() - pollStartedAt > 65000) break;
+          }
+
+          // If live polling did not reach final state, force one final pass.
+          if (!gotFinal) {
+            const finalResp = await fetch(`${apiBaseUrl}/analyze`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+            });
+            if (runToken !== pollTokenRef.current) return;
+            if (finalResp.ok) {
+              const finalData = (await finalResp.json()) as AnalysisResponse;
+              const monotonicRisk = strongerRiskLevel(
+                latestLiveRisk,
+                (finalData.risk_level || "Low") as RiskLevel
+              );
+              if (monotonicRisk !== finalData.risk_level) {
+                finalData.risk_level = monotonicRisk;
+              }
+              setResult(finalData);
+              setLiveMeta({
+                analysis_id: startData.analysis_id || "",
+                final: true,
+                stage: 3,
+                progress: 100,
+                risk_level: monotonicRisk,
+                status_text: "Analysis completed.",
+                steps: [
+                  { key: "stage_1", label: "URL analysis", status: "done" },
+                  { key: "stage_2", label: "Redirect check", status: "done" },
+                  { key: "stage_3", label: "External checks", status: "done" },
+                ],
+              });
+              setCountdownSec(0);
             }
           }
         }

@@ -184,9 +184,9 @@ body::before {
 .header__logo--linkcheck {
   height: clamp(120px, 34vw, 180px);
   display: block;
-  transform: scale(1.28);
+  transform: scale(1.04);
   transform-origin: center center;
-  margin: -22px 0 -22px;
+  margin: -8px 0 -10px;
 }
 
 .header__logo-wrap:hover .header__logo {
@@ -194,7 +194,7 @@ body::before {
 }
 
 .header__logo-wrap:hover .header__logo--linkcheck {
-  transform: scale(1.34);
+  transform: scale(1.08);
 }
 
 .header__title {
