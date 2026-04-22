@@ -105,7 +105,7 @@ def _internal_error(_e):
 @app.get("/.well-known/security.txt")
 def security_txt():
     """RFC 9116 security disclosure contact (threat modeling / disclosure policy)."""
-    contact = (os.getenv("SECURITY_CONTACT_EMAIL") or "ierlich@gmail.com").strip()
+    contact = (os.getenv("SECURITY_CONTACT_EMAIL") or "erlix.co@gmail.com").strip()
     body = (
         f"Contact: mailto:{contact}\n"
         "Preferred-Languages: en, he\n"
@@ -113,6 +113,68 @@ def security_txt():
     )
     return app.response_class(body, mimetype="text/plain; charset=utf-8")
 gemini_api_key = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL_CANDIDATES = [
+    m.strip()
+    for m in (
+        os.getenv("GEMINI_MODEL_CANDIDATES")
+        or "gemini-2.5-flash,gemini-flash-latest,gemini-2.5-flash-lite"
+    ).split(",")
+    if m.strip()
+]
+GEMINI_RETRY_ATTEMPTS = max(1, int(os.getenv("GEMINI_RETRY_ATTEMPTS", "2")))
+GEMINI_RETRY_DELAY_SEC = max(0.0, float(os.getenv("GEMINI_RETRY_DELAY_SEC", "0.35")))
+
+
+def _extract_gemini_text(body: dict, default: str = "") -> str:
+    return (
+        body.get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [{}])[0]
+        .get("text", default)
+    )
+
+
+def _gemini_generate_text(
+    *,
+    prompt: str,
+    response_mime_type: str | None = None,
+    temperature: float = 0.0,
+    timeout_sec: int = 10,
+) -> str:
+    """Call Gemini with model fallback and short retry on transient errors."""
+    if not gemini_api_key:
+        return ""
+
+    payload: dict = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature},
+    }
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
+
+    retryable_codes = {429, 500, 502, 503, 504}
+    for model_name in GEMINI_MODEL_CANDIDATES:
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        for attempt in range(GEMINI_RETRY_ATTEMPTS):
+            try:
+                resp = requests.post(
+                    f"{endpoint}?key={gemini_api_key}",
+                    json=payload,
+                    timeout=timeout_sec,
+                )
+                if resp.ok:
+                    return _extract_gemini_text(resp.json(), default="")
+                if resp.status_code in retryable_codes and attempt < GEMINI_RETRY_ATTEMPTS - 1:
+                    time.sleep(GEMINI_RETRY_DELAY_SEC * (attempt + 1))
+                    continue
+                # Non-retryable (or retries exhausted): move to next fallback model.
+                break
+            except requests.RequestException:
+                if attempt < GEMINI_RETRY_ATTEMPTS - 1:
+                    time.sleep(GEMINI_RETRY_DELAY_SEC * (attempt + 1))
+                    continue
+                break
+    return ""
 
 # Input size caps for /analyze (DoS / abuse mitigation).
 MAX_ANALYZE_URL_LEN = int(os.getenv("MAX_ANALYZE_URL_LEN", "4096"))
@@ -1363,62 +1425,37 @@ Return STRICT JSON only with these boolean keys:
 - sensitive_action
 """
 
+    prompt = (
+        f"{schema_prompt}\n\n"
+        f"message: {message}\n"
+        f"url: {url}\n"
+    )
+    text = _gemini_generate_text(
+        prompt=prompt,
+        response_mime_type="application/json",
+        temperature=0.0,
+        timeout_sec=10,
+    )
+    if not text:
+        return 0, ["ai_model_unavailable"]
     try:
-        endpoint = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-2.5-flash:generateContent"
-        )
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": (
-                                f"{schema_prompt}\n\n"
-                                f"message: {message}\n"
-                                f"url: {url}\n"
-                            )
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json"
-            }
-        }
-        resp = requests.post(
-            f"{endpoint}?key={gemini_api_key}",
-            json=payload,
-            timeout=10
-        )
-        if not resp.ok:
-            return 0, ["ai_model_unavailable"]
-
-        body = resp.json()
-        text = (
-            body.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "{}")
-        )
         parsed = json.loads(text)
-
-        score = 0
-        reasons: list[str] = []
-        if bool(parsed.get("social_engineering")):
-            score += 20
-            reasons.append("ai_model_social_engineering")
-        if bool(parsed.get("impersonation")):
-            score += 20
-            reasons.append("ai_model_impersonation")
-        if bool(parsed.get("sensitive_action")):
-            score += 15
-            reasons.append("ai_model_sensitive_action")
-
-        return min(45, score), reasons
     except Exception:
         return 0, ["ai_model_unavailable"]
+
+    score = 0
+    reasons: list[str] = []
+    if bool(parsed.get("social_engineering")):
+        score += 20
+        reasons.append("ai_model_social_engineering")
+    if bool(parsed.get("impersonation")):
+        score += 20
+        reasons.append("ai_model_impersonation")
+    if bool(parsed.get("sensitive_action")):
+        score += 15
+        reasons.append("ai_model_sensitive_action")
+
+    return min(45, score), reasons
 
 
 def build_ai_model_summary(
@@ -1454,32 +1491,12 @@ def build_ai_model_summary(
         f"message: {message}\n"
         f"findings: {json.dumps(context_blob, ensure_ascii=False)}\n"
     )
-    try:
-        endpoint = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-2.5-flash:generateContent"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.1},
-        }
-        resp = requests.post(
-            f"{endpoint}?key={gemini_api_key}",
-            json=payload,
-            timeout=10,
-        )
-        if not resp.ok:
-            return ""
-        body = resp.json()
-        text = (
-            body.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
-        )
-        return str(text or "").strip()
-    except Exception:
-        return ""
+    text = _gemini_generate_text(
+        prompt=prompt,
+        temperature=0.1,
+        timeout_sec=10,
+    )
+    return str(text or "").strip()
 
 
 def external_intel_status(url: str) -> tuple[str, list[str]]:
@@ -2898,7 +2915,7 @@ def send_issue_report_email(
     password = os.getenv("SMTP_PASSWORD", "").strip()
     use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
     mail_from = os.getenv("REPORT_FROM_EMAIL", user).strip()
-    mail_to = os.getenv("REPORT_TO_EMAIL", "ierlich@gmail.com").strip()
+    mail_to = os.getenv("REPORT_TO_EMAIL", "erlix.co@gmail.com").strip()
 
     ctx = _format_checked_scan_context(url_field, message_field)
     ctx_block = (
