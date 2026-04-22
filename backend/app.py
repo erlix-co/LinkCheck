@@ -2802,10 +2802,10 @@ def analyze_live_status(analysis_id: str):
             return jsonify({"ok": False, "error": "analysis_not_found"}), 404
         age = time.time() - float(job.get("created_at", 0))
         if not job.get("final") and age > LIVE_JOB_TIMEOUT_SEC:
-            job["final"] = True
+            # Do not mark partial data as final; avoid early "safe/green" impressions.
             job["stage"] = max(2, int(job.get("stage", 1)))
             job["progress"] = _stage_progress(job["stage"], False)
-            job["status_text"] = "External checks timed out. Partial result shown."
+            job["status_text"] = "Still collecting external checks. Please wait a few more seconds."
         response = {
             "ok": True,
             "analysis_id": analysis_id,
