@@ -560,80 +560,41 @@ body::before {
   margin-bottom: var(--space-sm);
 }
 
-.live-progress__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-md);
-}
-
 .live-progress__status {
   font-size: 0.83rem;
   color: var(--color-text-dim);
   margin-bottom: var(--space-sm);
 }
 
-.progress-ring {
-  --progress: 0;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: conic-gradient(var(--color-brand) calc(var(--progress) * 1%), rgba(255, 255, 255, 0.1) 0);
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  position: relative;
-}
-
-.progress-ring::after {
-  content: "";
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--color-surface);
-  position: absolute;
-}
-
-.progress-ring__value {
-  font-size: 0.65rem;
-  color: var(--color-text-muted);
-  position: relative;
-  z-index: 1;
-}
-
-.steps-list {
-  display: grid;
-  gap: 6px;
-}
-
-.step-row {
+.live-countdown {
   display: flex;
-  align-items: center;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 20, 46, 0.45);
+  margin-bottom: var(--space-sm);
+}
+
+.live-countdown__label {
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+}
+
+.live-countdown__value {
+  font-family: 'Space Grotesk', monospace;
+  font-size: 1rem;
+  color: var(--color-accent);
+  letter-spacing: 0.04em;
+}
+
+.reason-item--ai-summary {
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: rgba(56, 189, 248, 0.08);
   gap: var(--space-sm);
-}
-
-.step-row__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: rgba(138, 150, 179, 0.45);
-}
-
-.step-row__dot--done {
-  background: var(--color-safe);
-}
-
-.step-row__dot--done-pending {
-  background: rgba(138, 150, 179, 0.5);
-}
-
-.step-row__dot--in_progress {
-  background: var(--color-warn);
-}
-
-.step-row__label {
-  font-size: 0.84rem;
-  color: var(--color-text-muted);
 }
 
 /* URL info */
