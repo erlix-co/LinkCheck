@@ -57,6 +57,8 @@ LIVE_CACHE_TTL_SEC = int(os.getenv("LIVE_CACHE_TTL_SEC", "180"))
 EXTERNAL_INTEL_TIMEOUT_SEC = int(os.getenv("EXTERNAL_INTEL_TIMEOUT_SEC", "4"))
 ANALYSIS_FETCH_TIMEOUT_SEC = int(os.getenv("ANALYSIS_FETCH_TIMEOUT_SEC", "4"))
 WHOIS_TIMEOUT_SEC = float(os.getenv("WHOIS_TIMEOUT_SEC", "2.5"))
+LIVE_LOW_STABILIZE_RETRIES = max(0, int(os.getenv("LIVE_LOW_STABILIZE_RETRIES", "2")))
+LIVE_LOW_STABILIZE_DELAY_SEC = max(0.0, float(os.getenv("LIVE_LOW_STABILIZE_DELAY_SEC", "2.0")))
 GSB_CACHE_TTL_SEC = int(os.getenv("GSB_CACHE_TTL_SEC", "1800"))
 GSB_COOLDOWN_SEC = int(os.getenv("GSB_COOLDOWN_SEC", "180"))
 LIVE_ANALYSIS_JOBS: dict[str, dict] = {}
@@ -2287,6 +2289,32 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
     # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
     full_payload = {"url": submitted_url, "message": message, "language": language}
     final_result = _run_full_analysis_internal(full_payload)
+    transient_intel_keys = {"vt_pending", "urlscan_pending", "gsb_unavailable"}
+
+    # When low-risk result still relies on pending/unavailable external intel,
+    # retry briefly before finalizing to reduce "first scan green, second scan red" behavior.
+    for attempt in range(LIVE_LOW_STABILIZE_RETRIES):
+        result_level = str(final_result.get("risk_level", "Low"))
+        result_keys = set(final_result.get("reason_keys", []) or [])
+        if result_level != "Low" or not (result_keys & transient_intel_keys):
+            break
+        with LIVE_LOCK:
+            job = LIVE_ANALYSIS_JOBS.get(job_id)
+            if not job:
+                return
+            job["stage"] = 3
+            job["steps"] = _steps_payload(3, False)
+            job["status_text"] = f"Final verification pass {attempt + 1}/{LIVE_LOW_STABILIZE_RETRIES}..."
+        if LIVE_LOW_STABILIZE_DELAY_SEC > 0:
+            time.sleep(LIVE_LOW_STABILIZE_DELAY_SEC)
+        refreshed = _run_full_analysis_internal(full_payload)
+        previous_level = str(final_result.get("risk_level", "Low"))
+        refreshed_level = str(refreshed.get("risk_level", "Low"))
+        final_result = refreshed
+        # Keep monotonic severity during stabilization retries.
+        if _risk_to_rank(refreshed_level) < _risk_to_rank(previous_level):
+            final_result["risk_level"] = previous_level
+
     candidate = str(final_result.get("risk_level", "Low"))
     final_level = _escalate_level(stage2_level, candidate)
     if final_level != candidate:
