@@ -182,11 +182,11 @@ body::before {
 }
 
 .header__logo--linkcheck {
-  height: clamp(120px, 34vw, 180px);
+  height: clamp(86px, 24vw, 126px);
   display: block;
-  transform: scale(1.04);
+  transform: scale(1);
   transform-origin: center center;
-  margin: -8px 0 -10px;
+  margin: -4px 0 -6px;
 }
 
 .header__logo-wrap:hover .header__logo {
@@ -194,7 +194,7 @@ body::before {
 }
 
 .header__logo-wrap:hover .header__logo--linkcheck {
-  transform: scale(1.08);
+  transform: scale(1.03);
 }
 
 .header__title {
