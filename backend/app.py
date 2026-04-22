@@ -57,8 +57,12 @@ LIVE_CACHE_TTL_SEC = int(os.getenv("LIVE_CACHE_TTL_SEC", "180"))
 EXTERNAL_INTEL_TIMEOUT_SEC = int(os.getenv("EXTERNAL_INTEL_TIMEOUT_SEC", "4"))
 ANALYSIS_FETCH_TIMEOUT_SEC = int(os.getenv("ANALYSIS_FETCH_TIMEOUT_SEC", "4"))
 WHOIS_TIMEOUT_SEC = float(os.getenv("WHOIS_TIMEOUT_SEC", "2.5"))
+GSB_CACHE_TTL_SEC = int(os.getenv("GSB_CACHE_TTL_SEC", "1800"))
+GSB_COOLDOWN_SEC = int(os.getenv("GSB_COOLDOWN_SEC", "180"))
 LIVE_ANALYSIS_JOBS: dict[str, dict] = {}
 LIVE_ANALYSIS_CACHE: dict[str, dict] = {}
+GSB_RESULT_CACHE: dict[str, dict] = {}
+GSB_DISABLED_UNTIL_TS = 0.0
 LIVE_LOCK = threading.Lock()
 WHOIS_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
@@ -388,6 +392,7 @@ I18N = {
         "ai_model_impersonation": "AI detected likely impersonation of a trusted organization.",
         "ai_model_sensitive_action": "AI detected request for sensitive user action.",
         "ai_subdomain_impersonation_combo": "AI detected social-engineering text together with a potentially misleading subdomain.",
+        "domain_reputation_warning": "Main domain reputation adds risk to this link.",
         "ai_model_unavailable": "AI semantic analysis is currently unavailable.",
         "intel_configured": "Advanced safety checks are connected: {sources}.",
         "intel_missing": "Some advanced safety checks are not connected yet.",
@@ -449,6 +454,7 @@ I18N = {
         "ai_model_impersonation": "מנוע ה-AI זיהה חשד להתחזות לגורם אמין.",
         "ai_model_sensitive_action": "מנוע ה-AI זיהה בקשה לפעולה רגישה מצד המשתמש.",
         "ai_subdomain_impersonation_combo": "מנוע ה-AI זיהה הנדסה חברתית יחד עם תת-דומיין שעשוי להטעות.",
+        "domain_reputation_warning": "מוניטין הדומיין הראשי מוסיף סיכון לקישור זה.",
         "ai_model_unavailable": "ניתוח סמנטי מבוסס AI אינו זמין כרגע.",
         "intel_configured": "בדיקות בטיחות מתקדמות מחוברות: {sources}.",
         "intel_missing": "חלק מבדיקות הבטיחות המתקדמות עדיין לא מחוברות.",
@@ -851,6 +857,13 @@ def decode_url_for_analysis(url: str) -> str:
     normalized = normalize_url_for_checks(url)
     if not normalized:
         return normalized
+    decoded = normalized
+    for _ in range(2):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    return decoded
 
 
 def canonicalize_url_for_external_intel(url: str) -> str:
@@ -870,14 +883,6 @@ def canonicalize_url_for_external_intel(url: str) -> str:
         return urlunparse(stable)
     except Exception:
         return normalized
-
-    decoded = normalized
-    for _ in range(2):
-        next_value = unquote(decoded)
-        if next_value == decoded:
-            break
-        decoded = next_value
-    return decoded
 
 
 def _drop_url_fragment(url: str) -> str:
@@ -1416,6 +1421,67 @@ Return STRICT JSON only with these boolean keys:
         return 0, ["ai_model_unavailable"]
 
 
+def build_ai_model_summary(
+    *,
+    message: str,
+    submitted_url: str,
+    analyzed_url: str,
+    language: str,
+    risk_level: str,
+    reason_keys: list[str],
+    domain_verdict: dict,
+    tld_country_code: str,
+) -> str:
+    """Dynamic user-facing AI summary synced with final findings."""
+    if not message or not gemini_api_key:
+        return ""
+    response_language = "Hebrew" if language == "he" else "English"
+    context_blob = {
+        "submitted_url": submitted_url,
+        "analyzed_url": analyzed_url,
+        "risk_level": risk_level,
+        "reason_keys": reason_keys,
+        "domain_verdict": domain_verdict,
+        "tld_country_code": tld_country_code,
+    }
+    prompt = (
+        "You are a phishing-risk explainer.\n"
+        f"Respond strictly in {response_language}.\n"
+        "Write 2-4 short sentences, plain language for non-technical users.\n"
+        "Must explain risk by combining message text and technical findings.\n"
+        "If there is country mismatch or suspicious short/final URL behavior, mention it clearly.\n"
+        "Do not output JSON.\n\n"
+        f"message: {message}\n"
+        f"findings: {json.dumps(context_blob, ensure_ascii=False)}\n"
+    )
+    try:
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.5-flash:generateContent"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        resp = requests.post(
+            f"{endpoint}?key={gemini_api_key}",
+            json=payload,
+            timeout=10,
+        )
+        if not resp.ok:
+            return ""
+        body = resp.json()
+        text = (
+            body.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+        return str(text or "").strip()
+    except Exception:
+        return ""
+
+
 def external_intel_status(url: str) -> tuple[str, list[str]]:
     if not url:
         return "", []
@@ -1431,6 +1497,23 @@ def external_intel_status(url: str) -> tuple[str, list[str]]:
     if enabled_sources:
         return "intel_configured", enabled_sources
     return "intel_missing", []
+
+
+def _should_query_google_safe_browsing(
+    *,
+    url_score: int,
+    url_reason_keys: list[str],
+    was_short_link: bool,
+    has_message: bool,
+) -> bool:
+    strong_keys = {"brand_mismatch", "lookalike_brand", "at_sign_userinfo", "suspicious_tld", "punycode", "mixed_scripts"}
+    if was_short_link:
+        return True
+    if has_message:
+        return True
+    if url_score >= 20:
+        return True
+    return any(k in strong_keys for k in url_reason_keys)
 
 
 def _vt_url_id(url: str) -> str:
@@ -1543,10 +1626,20 @@ def query_google_safe_browsing(url: str, api_key: str) -> tuple[int, list[str], 
     """
     Returns: (score_delta, reason_keys, intel_note_key)
     """
+    global GSB_DISABLED_UNTIL_TS
+    now = time.time()
+    if now < GSB_DISABLED_UNTIL_TS:
+        return 0, ["gsb_unavailable"], "gsb_unavailable"
+
     endpoint = (
         "https://safebrowsing.googleapis.com/v4/threatMatches:find"
         f"?key={api_key}"
     )
+    cache_key = canonicalize_url_for_external_intel(url)
+    with LIVE_LOCK:
+        cached = GSB_RESULT_CACHE.get(cache_key)
+        if cached and (now - float(cached.get("ts", 0)) <= GSB_CACHE_TTL_SEC):
+            return int(cached.get("score", 0)), list(cached.get("reason_keys", [])), str(cached.get("note", "intel_configured"))
     payload = {
         "client": {"clientId": "linkcheck", "clientVersion": "1.0"},
         "threatInfo": {
@@ -1564,16 +1657,27 @@ def query_google_safe_browsing(url: str, api_key: str) -> tuple[int, list[str], 
     try:
         resp = requests.post(endpoint, json=payload, timeout=EXTERNAL_INTEL_TIMEOUT_SEC)
         if not resp.ok:
+            GSB_DISABLED_UNTIL_TS = time.time() + GSB_COOLDOWN_SEC
             return 0, ["gsb_unavailable"], "gsb_unavailable"
         body = resp.json() if resp.text else {}
         matches = body.get("matches", []) or []
         if not matches:
-            return 0, ["gsb_clean"], "intel_configured"
+            result = (0, ["gsb_clean"], "intel_configured")
+            with LIVE_LOCK:
+                GSB_RESULT_CACHE[cache_key] = {"ts": time.time(), "score": result[0], "reason_keys": result[1], "note": result[2]}
+            return result
         threat_types = {str(m.get("threatType", "")).upper() for m in matches}
         if "MALWARE" in threat_types or "SOCIAL_ENGINEERING" in threat_types:
-            return 50, ["gsb_malicious"], "intel_configured"
-        return 20, ["gsb_suspicious"], "intel_configured"
+            result = (50, ["gsb_malicious"], "intel_configured")
+            with LIVE_LOCK:
+                GSB_RESULT_CACHE[cache_key] = {"ts": time.time(), "score": result[0], "reason_keys": result[1], "note": result[2]}
+            return result
+        result = (20, ["gsb_suspicious"], "intel_configured")
+        with LIVE_LOCK:
+            GSB_RESULT_CACHE[cache_key] = {"ts": time.time(), "score": result[0], "reason_keys": result[1], "note": result[2]}
+        return result
     except Exception:
+        GSB_DISABLED_UNTIL_TS = time.time() + GSB_COOLDOWN_SEC
         return 0, ["gsb_unavailable"], "gsb_unavailable"
 
 
@@ -2190,7 +2294,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
 
 
 @app.post("/analyze")
-@limiter.limit("60 per minute")
+@limiter.limit("20 per minute")
 def analyze():
     payload = request.get_json(silent=True) or {}
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
@@ -2273,31 +2377,47 @@ def analyze():
     intel_score = 0
     intel_reason_keys: list[str] = []
 
-    intel_url = canonicalize_url_for_external_intel(url_to_check)
+    def _query_external_intel(target_url: str) -> None:
+        nonlocal intel_key, intel_score, intel_reason_keys
+        intel_target_url = canonicalize_url_for_external_intel(target_url)
+        if not intel_target_url:
+            return
+        if os.getenv("VIRUSTOTAL_API_KEY"):
+            vt_score, vt_reason_keys, vt_note_key = query_virustotal(
+                intel_target_url, os.getenv("VIRUSTOTAL_API_KEY", "")
+            )
+            intel_score += vt_score
+            intel_reason_keys.extend(vt_reason_keys)
+            intel_key = vt_note_key
+        if os.getenv("URLSCAN_API_KEY"):
+            us_score, us_reason_keys, us_note_key = query_urlscan(
+                intel_target_url, os.getenv("URLSCAN_API_KEY", "")
+            )
+            intel_score += us_score
+            intel_reason_keys.extend(us_reason_keys)
+            intel_key = us_note_key
+        if os.getenv("GOOGLE_SAFE_BROWSING_API_KEY") and _should_query_google_safe_browsing(
+            url_score=url_score,
+            url_reason_keys=url_reason_keys,
+            was_short_link=was_short_link,
+            has_message=bool(message),
+        ):
+            gsb_score, gsb_reason_keys, gsb_note_key = query_google_safe_browsing(
+                intel_target_url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
+            )
+            intel_score += gsb_score
+            intel_reason_keys.extend(gsb_reason_keys)
+            intel_key = gsb_note_key
 
-    if intel_url and os.getenv("VIRUSTOTAL_API_KEY"):
-        vt_score, vt_reason_keys, vt_note_key = query_virustotal(
-            intel_url, os.getenv("VIRUSTOTAL_API_KEY", "")
-        )
-        intel_score += vt_score
-        intel_reason_keys.extend(vt_reason_keys)
-        intel_key = vt_note_key
+    # Double-check short-link source and final destination to keep verdicts aligned.
+    checked_targets: list[str] = []
+    if normalized_submitted:
+        checked_targets.append(normalized_submitted)
+    if url_to_check and canonicalize_url_for_external_intel(url_to_check) != canonicalize_url_for_external_intel(normalized_submitted):
+        checked_targets.append(url_to_check)
 
-    if intel_url and os.getenv("URLSCAN_API_KEY"):
-        us_score, us_reason_keys, us_note_key = query_urlscan(
-            intel_url, os.getenv("URLSCAN_API_KEY", "")
-        )
-        intel_score += us_score
-        intel_reason_keys.extend(us_reason_keys)
-        intel_key = us_note_key
-
-    if intel_url and os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"):
-        gsb_score, gsb_reason_keys, gsb_note_key = query_google_safe_browsing(
-            intel_url, os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
-        )
-        intel_score += gsb_score
-        intel_reason_keys.extend(gsb_reason_keys)
-        intel_key = gsb_note_key
+    for target_url in checked_targets:
+        _query_external_intel(target_url)
 
     # Balance lexical "long URL" signal:
     # if it is the only local warning and external intel is clean/unavailable,
@@ -2390,14 +2510,16 @@ def analyze():
     vt_configured = bool(os.getenv("VIRUSTOTAL_API_KEY"))
     urlscan_configured = bool(os.getenv("URLSCAN_API_KEY"))
     gsb_configured = bool(os.getenv("GOOGLE_SAFE_BROWSING_API_KEY"))
+    vt_pending = "vt_pending" in intel_reason_keys
+    urlscan_pending = "urlscan_pending" in intel_reason_keys
     vt_clean = (
         (not vt_configured)
         or ("vt_clean" in intel_reason_keys)
         or ("vt_single_vendor_flag" in intel_reason_keys)
     )
-    vt_checked = vt_configured
+    vt_checked = vt_configured and not vt_pending
     urlscan_clean = not urlscan_configured or "urlscan_clean" in intel_reason_keys
-    urlscan_checked = urlscan_configured
+    urlscan_checked = urlscan_configured and not urlscan_pending
     gsb_clean = "gsb_clean" in intel_reason_keys
     gsb_unavailable = "gsb_unavailable" in intel_reason_keys
     gsb_checked = gsb_configured and not gsb_unavailable
@@ -2429,8 +2551,8 @@ def analyze():
         )
 
     # Core trust requirements must pass; unconfigured intel sources are skipped (neither pass nor block).
-    vt_passes = (not vt_checked) or vt_clean
-    urlscan_passes = (not urlscan_checked) or urlscan_clean
+    vt_passes = (not vt_configured) or vt_pending or vt_clean
+    urlscan_passes = (not urlscan_configured) or urlscan_pending or urlscan_clean
     gsb_passes = (not gsb_configured) or gsb_unavailable or gsb_clean
     message_passes = not any(k in MESSAGE_WARNING_KEYS for k in reason_keys)
     page_passes = (page_status_code is None) or page_exists
@@ -2530,6 +2652,18 @@ def analyze():
             "is_safe": domain_risk_level == "Low",
             "reason_keys": domain_reason_keys,
         }
+        if domain_risk_level == "High" and risk_level != "High":
+            risk_level = "High"
+            total_score = max(total_score, 70)
+            if "domain_reputation_warning" not in reason_keys:
+                reason_keys.append("domain_reputation_warning")
+        elif domain_risk_level == "Medium" and risk_level == "Low":
+            risk_level = "Medium"
+            total_score = max(total_score, 40)
+            if "domain_reputation_warning" not in reason_keys:
+                reason_keys.append("domain_reputation_warning")
+    reason_keys = list(dict.fromkeys(reason_keys))
+    reasons = [t(language, key) for key in reason_keys] if reason_keys else [t(language, "safe_now")]
     link_verdict = {
         "url": url_to_check,
         "risk_level": risk_level,
@@ -2537,6 +2671,16 @@ def analyze():
         "is_safe": risk_level == "Low",
         "reason_keys": list(dict.fromkeys(reason_keys)),
     }
+    model_intent_summary = build_ai_model_summary(
+        message=message,
+        submitted_url=normalized_submitted or "",
+        analyzed_url=url_to_check or "",
+        language=language,
+        risk_level=risk_level,
+        reason_keys=list(dict.fromkeys(reason_keys)),
+        domain_verdict=domain_verdict,
+        tld_country_code=url_context.get("tld_country_code", ""),
+    )
 
     return jsonify(
         {
@@ -2562,12 +2706,13 @@ def analyze():
             "page_audience": url_context.get("page_audience", ""),
             "domain_verdict": domain_verdict,
             "link_verdict": link_verdict,
+            "ai_model_summary": model_intent_summary,
         }
     )
 
 
 @app.post("/analyze/live/start")
-@limiter.limit("30 per minute")
+@limiter.limit("15 per minute")
 def analyze_live_start():
     payload = request.get_json(silent=True) or {}
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
@@ -2632,7 +2777,7 @@ def analyze_live_start():
 
 
 @app.get("/analyze/live/status/<analysis_id>")
-@limiter.limit("180 per minute")
+@limiter.limit("120 per minute")
 def analyze_live_status(analysis_id: str):
     with LIVE_LOCK:
         job = LIVE_ANALYSIS_JOBS.get(analysis_id)

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CONTACT_EMAIL } from "./data/termsOfUse";
 import { FooterLegal, ReportIssueModal, TermsInline, TermsModal } from "./TermsUi";
 import linkCheckLogo from "../Logo LinkCheck.png";
@@ -50,6 +50,7 @@ type AnalysisResponse = {
     is_safe?: boolean;
     reason_keys?: string[];
   };
+  ai_model_summary?: string;
 };
 
 type LiveStep = {
@@ -86,7 +87,7 @@ const translations = {
     urlPlaceholder: "https://example.com",
     scan: "Scan Now",
     scanning: "Scanning...",
-    scanHint: "Recommended: run a second check after a few seconds to confirm result stability.",
+    scanHint: "",
     needInput: "Please enter a link or paste a message.",
     invalidUrl: "This doesn't look like a valid link.",
     safe: "Looks Safe",
@@ -150,6 +151,8 @@ const translations = {
     liveStatus: "Results are updated in real time as more data is analyzed",
     waitingExternal: "Waiting for external analysis...",
     analysisSteps: "Analysis steps",
+    parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute.",
+    countdownLabel: "Estimated time left",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -162,7 +165,7 @@ const translations = {
     urlPlaceholder: "https://example.com",
     scan: "בדיקה",
     scanning: "בודק...",
-    scanHint: "מומלץ לבצע בדיקה חוזרת אחרי כמה שניות כדי לוודא יציבות תוצאה.",
+    scanHint: "",
     needInput: "יש להזין קישור או הודעה.",
     invalidUrl: "זה לא נראה כמו קישור תקין.",
     safe: "נראה בטוח",
@@ -225,6 +228,8 @@ const translations = {
     liveStatus: "התוצאות מתעדכנות בזמן אמת ככל שנאסף מידע נוסף",
     waitingExternal: "ממתינים לניתוח חיצוני...",
     analysisSteps: "שלבי בדיקה",
+    parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת כחצי דקה.",
+    countdownLabel: "זמן משוער לסיום",
   }
 } as const;
 
@@ -259,6 +264,7 @@ const reasonI18n = {
     ai_model_impersonation: "AI found signs that the message may be pretending to be from a trusted source.",
     ai_model_sensitive_action: "AI found a request for a sensitive user action.",
     ai_subdomain_impersonation_combo: "AI detected social-engineering pressure combined with a potentially misleading subdomain.",
+    domain_reputation_warning: "The main domain reputation increased the risk for this link.",
     ai_model_unavailable: "AI message analysis is temporarily unavailable.",
     vt_malicious: "Global virus and threat databases marked this link as malicious.",
     vt_single_vendor_flag: "Only one threat engine flagged this link. This is a weak signal and should be reviewed in context.",
@@ -312,6 +318,7 @@ const reasonI18n = {
     ai_model_impersonation: "מנוע ה-AI מצא סימנים לכך שההודעה אולי מתחזה לגורם אמין.",
     ai_model_sensitive_action: "מנוע ה-AI מצא בקשה לפעולה רגישה מצד המשתמש.",
     ai_subdomain_impersonation_combo: "מנוע ה-AI זיהה לחץ/מניפולציה יחד עם תת-דומיין שעשוי להטעות.",
+    domain_reputation_warning: "מוניטין הדומיין הראשי העלה את רמת הסיכון לקישור הזה.",
     ai_model_unavailable: "בדיקת ה-AI של ההודעה אינה זמינה כרגע.",
     vt_malicious: "בדיקה במאגרי וירוסים ואיומים עולמיים סימנה את הקישור כזדוני.",
     vt_single_vendor_flag: "רק מנוע אחד סימן את הקישור כמסוכן.",
@@ -382,6 +389,7 @@ export function App() {
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [liveMeta, setLiveMeta] = useState<LiveMeta | null>(null);
+  const [countdownSec, setCountdownSec] = useState(30);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -389,6 +397,14 @@ export function App() {
   const [showReportModal, setShowReportModal] = useState(false);
   const pollTokenRef = useRef(0);
   const t = translations[language];
+
+  useEffect(() => {
+    if (!liveMeta || liveMeta.final || countdownSec <= 0) return;
+    const timer = window.setTimeout(() => {
+      setCountdownSec((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [liveMeta, countdownSec]);
 
   const riskVariant = (level: RiskLevel) =>
     level === "Low" ? "safe" : level === "Medium" ? "warn" : "danger";
@@ -426,38 +442,42 @@ export function App() {
     }
   };
 
-  const getLocalizedReasons = (data: AnalysisResponse): string[] => {
+  const getLocalizedReasons = (data: AnalysisResponse): Array<{ key: string; text: string }> => {
     if (data.reason_keys?.length) {
-      return data.reason_keys.map((key) => {
+      const filteredKeys = data.reason_keys.filter((key) => {
+        if (!data.ai_model_summary) return true;
+        return !["ai_model_social_engineering", "ai_model_impersonation", "ai_model_sensitive_action"].includes(key);
+      });
+      return filteredKeys.map((key) => {
         if (key === "lookalike_brand") {
           const target = (data.lookalike_target || "").trim();
           if (target) {
             if (language === "he") {
-              return `הקישור אינו ${target} אלא ניסיון חיקוי!`;
+              return { key, text: `הקישור אינו ${target} אלא ניסיון חיקוי!` };
             }
-            return `This is not ${target}. It is likely an imitation attempt!`;
+            return { key, text: `This is not ${target}. It is likely an imitation attempt!` };
           }
         }
         if (key === "brand" || key === "brand_mismatch") {
           const target = (data.brand_target || "").trim();
           if (target) {
             if (language === "he") {
-              return `הקישור אינו ${target} אלא ניסיון חיקוי!`;
+              return { key, text: `הקישור אינו ${target} אלא ניסיון חיקוי!` };
             }
-            return `This is not ${target}. It is likely an imitation attempt!`;
+            return { key, text: `This is not ${target}. It is likely an imitation attempt!` };
           }
         }
         if (key === "tld_country_notice") {
           const country = countryNameFromTld(data);
           if (country) {
-            if (language === "he") return `האתר ממקום ב: ${country}`;
-            return `Website is in: ${country}`;
+            if (language === "he") return { key, text: `האתר ממקום ב: ${country}` };
+            return { key, text: `Website is in: ${country}` };
           }
         }
-        return reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key;
+        return { key, text: reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key };
       });
     }
-    return data.reasons;
+    return (data.reasons || []).map((text) => ({ key: "", text }));
   };
 
   const getReasonIcon = (key: string): string => {
@@ -486,6 +506,7 @@ export function App() {
     setError("");
     setResult(null);
     setLiveMeta(null);
+    setCountdownSec(30);
 
     if (!termsAccepted) {
       setError(t.termsRequired);
@@ -542,7 +563,10 @@ export function App() {
               steps: (statusData.steps || []) as LiveStep[],
             });
             setResult((statusData.result || null) as AnalysisResponse | null);
-            if (statusData.final) break;
+            if (statusData.final) {
+              setCountdownSec(0);
+              break;
+            }
           }
         }
         return;
@@ -571,6 +595,7 @@ export function App() {
           { key: "stage_3", label: "External checks", status: "done" },
         ],
       });
+      setCountdownSec(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -729,7 +754,7 @@ export function App() {
           <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
           {loading ? t.scanning : t.scan}
         </button>
-        <p className="scan-hint">{t.scanHint}</p>
+        {t.scanHint ? <p className="scan-hint">{t.scanHint}</p> : null}
 
         <TermsInline
           lang={language}
@@ -751,30 +776,18 @@ export function App() {
         {/* Live progress (always visible during live analysis) */}
         {liveMeta && !loading && (
           <div className="result-section live-progress">
-            <div className="live-progress__header">
-              <div className="result-section__title">{t.analysisSteps}</div>
-              <div className="progress-ring" style={{ ["--progress" as string]: `${liveMeta.progress}` }}>
-                <span className="progress-ring__value">{liveMeta.progress}%</span>
-              </div>
+            <div className="result-section__title">{t.analysisSteps}</div>
+            <div className="live-progress__status">
+              {t.parallelCheckNotice}
+            </div>
+            <div className="live-countdown" dir="ltr">
+              <span className="live-countdown__label">{t.countdownLabel}</span>
+              <span className="live-countdown__value">
+                00:{String(liveMeta.final ? 0 : countdownSec).padStart(2, "0")}
+              </span>
             </div>
             <div className="live-progress__status">
               {liveMeta.final ? t.liveStatus : (liveMeta.status_text || t.waitingExternal)}
-            </div>
-            <div className="steps-list">
-              {liveMeta.steps.map((step) => (
-                <div className="step-row" key={step.key}>
-                  <span
-                    className={`step-row__dot ${
-                      step.status === "done"
-                        ? liveMeta.final
-                          ? "step-row__dot--done"
-                          : "step-row__dot--done-pending"
-                        : `step-row__dot--${step.status}`
-                    }`}
-                  />
-                  <span className="step-row__label">{step.label}</span>
-                </div>
-              ))}
             </div>
           </div>
         )}
@@ -923,12 +936,18 @@ export function App() {
             {/* Reasons */}
             <div className="result-section">
               <div className="result-section__title">{t.reasons}</div>
+              {result.ai_model_summary ? (
+                <div className="reason-item reason-item--ai-summary">
+                  <span className="reason-item__icon">🤖</span>
+                  <span>{result.ai_model_summary}</span>
+                </div>
+              ) : null}
               {getLocalizedReasons(result).map((reason, i) => (
                 <div className="reason-item" key={i}>
                   <span className="reason-item__icon">
-                    {result.reason_keys?.[i] ? getReasonIcon(result.reason_keys[i]) : "\u{1F50D}"}
+                    {reason.key ? getReasonIcon(reason.key) : "\u{1F50D}"}
                   </span>
-                  <span>{reason}</span>
+                  <span>{reason.text}</span>
                 </div>
               ))}
             </div>
