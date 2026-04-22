@@ -199,7 +199,7 @@ const translations = {
     statusNa: "לא רלוונטי",
     footer: "מופעל על ידי Erlix",
     footerTerms: "תנאי שימוש",
-    footerContact: "יצירת קשר",
+    footerContact: "ליצירת קשר",
     footerReport: "דיווח על תקלה",
     termsRequired: "יש לאשר את תנאי השימוש לפני ביצוע בדיקה.",
     contactLine: `יצירת קשר: ${CONTACT_EMAIL}`,
