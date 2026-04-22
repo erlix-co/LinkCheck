@@ -111,11 +111,15 @@ body::before {
   justify-content: space-between;
   margin-bottom: var(--space-md);
   animation: fadeSlideUp 0.6s ease 0.06s both;
+  position: relative;
 }
 
 .top-rail__home-link {
   display: inline-flex;
   text-decoration: none;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 1;
 }
 
 .top-rail__erlix-logo {
@@ -148,6 +152,11 @@ body::before {
 
 .header__logo-link {
   text-decoration: none;
+}
+
+.lang-toggle {
+  position: relative;
+  z-index: 2;
 }
 
 .header__logo-glow {

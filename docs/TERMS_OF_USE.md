@@ -62,7 +62,7 @@
 
 ### 10. יצירת קשר
 
-לשאלות בנוגע לתנאים או לפרטיות: **ierlich@gmail.com**
+לשאלות בנוגע לתנאים או לפרטיות: **erlix.co@gmail.com**
 
 ### 11. גיל
 
@@ -131,7 +131,7 @@
 
 ### 10. Contact
 
-Questions about these Terms or privacy: **ierlich@gmail.com**
+Questions about these Terms or privacy: **erlix.co@gmail.com**
 
 ### 11. Age
 

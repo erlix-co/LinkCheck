@@ -698,16 +698,24 @@ export function App() {
           <button
             type="button"
             className={`lang-toggle__btn ${language === "en" ? "lang-toggle__btn--active" : ""}`}
-            onClick={() => setLanguage("en")}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setLanguage("en");
+            }}
           >
             EN
           </button>
           <button
             type="button"
             className={`lang-toggle__btn ${language === "he" ? "lang-toggle__btn--active" : ""}`}
-            onClick={() => setLanguage("he")}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setLanguage("he");
+            }}
           >
-            עב
+            HE
           </button>
         </div>
       </div>
