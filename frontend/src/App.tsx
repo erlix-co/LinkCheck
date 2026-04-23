@@ -33,6 +33,8 @@ type AnalysisResponse = {
   lookalike_target?: string;
   lookalike_seen?: string;
   brand_target?: string;
+  case_confusable_char?: string;
+  case_confusable_lower_host?: string;
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
@@ -247,7 +249,7 @@ const reasonI18n = {
     suspicious_words: "The link contains words often used in scam or phishing messages.",
     lookalike_brand: "The site name looks very similar to a well-known brand or website.",
     at_sign_userinfo: "The link uses a trick to hide the real destination.",
-    case_confusable: "The site name uses confusing letter shapes to mislead people.",
+    case_confusable: "The website address uses a suspicious uppercase character.",
     mixed_scripts: "The link mixes different alphabets, which is a common scam trick.",
     unicode_lookalike: "The link uses characters that look normal but may be misleading.",
     punycode: "The link uses an encoded domain format that can hide misleading characters.",
@@ -288,6 +290,8 @@ const reasonI18n = {
       "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
     short_https_to_http_downgrade:
       "The short link starts as secure HTTPS but ends at an unsecure page. Avoid entering personal details on the final page.",
+    shortlink_use_original_recommended:
+      "The final destination appears safe, but the short link itself adds uncertainty. Prefer using the original full link directly.",
     short_link_unresolved: "The full redirect chain could not be followed (error, loop, or blocked hop).",
     short_link_destination_blocked: "Redirects ended on a provider block or interstitial page; analysis uses the link you submitted.",
     hebrew_phishing_page_signals: "The page content in Hebrew includes phishing-style pressure/action terms.",
@@ -305,7 +309,7 @@ const reasonI18n = {
     suspicious_words: "בקישור יש מילים שמופיעות הרבה בהונאות ופישינג.",
     lookalike_brand: "שם האתר דומה מאוד למותג או לאתר מוכר.",
     at_sign_userinfo: "הקישור משתמש בטריק שמסתיר את היעד האמיתי.",
-    case_confusable: "שם האתר משתמש בצורת אותיות מבלבלת כדי להטעות.",
+    case_confusable: "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
     mixed_scripts: "הקישור מערב כמה סוגי אותיות, וזה טריק נפוץ בהונאות.",
     unicode_lookalike: "בקישור יש תווים שנראים רגילים, אבל עלולים להטעות.",
     punycode: "הקישור משתמש בפורמט מקודד שיכול להסתיר תווים מטעים.",
@@ -346,6 +350,8 @@ const reasonI18n = {
       "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
     short_https_to_http_downgrade:
       "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
+    shortlink_use_original_recommended:
+      "היעד הסופי נראה בטוח, אך קישור מקוצר מוסיף אי-ודאות. מומלץ להשתמש ישירות בקישור המלא המקורי.",
     short_link_unresolved: "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה או צעד חסום).",
     short_link_destination_blocked: "ההפניות הסתיימו בדף חסימה או ביניים של ספק; הניתוח מבוסס על הקישור שהזנת.",
     hebrew_phishing_page_signals: "בתוכן הדף בעברית נמצאו מונחי לחץ או פעולה שמאפיינים פישינג.",
@@ -492,6 +498,16 @@ export function App() {
           if (country) {
             if (language === "he") return { key, text: `האתר ממקום ב: ${country}` };
             return { key, text: `Website is in: ${country}` };
+          }
+        }
+        if (key === "case_confusable") {
+          const suspiciousChar = (data.case_confusable_char || "").trim();
+          const lowerHost = (data.case_confusable_lower_host || "").trim();
+          if (suspiciousChar && lowerHost) {
+            if (language === "he") {
+              return { key, text: `כתובת האתר משתמשת ב-${suspiciousChar} כדי להטעות. כתיבה תקינה: ${lowerHost}` };
+            }
+            return { key, text: `The website address uses '${suspiciousChar}' to mislead. Safer lowercase form: ${lowerHost}` };
           }
         }
         return { key, text: reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key };
