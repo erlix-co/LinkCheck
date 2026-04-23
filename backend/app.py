@@ -442,7 +442,7 @@ I18N = {
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
         "at_sign_userinfo": "URL uses '@' to hide the real destination domain.",
-        "case_confusable": "Domain uses mixed uppercase/lowercase letters to mimic another character.",
+        "case_confusable": "Website address uses a misleading uppercase character pattern.",
         "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
         "unicode_lookalike": "Link uses lookalike Unicode characters.",
         "punycode": "Link uses encoded international domain format (IDN).",
@@ -485,6 +485,7 @@ I18N = {
         "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
         "short_http_to_https_caution": "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
         "short_https_to_http_downgrade": "The short link started as secure HTTPS, but the final destination is not secure. Do not enter personal details on the final page.",
+        "shortlink_use_original_recommended": "The final destination appears safe, but the short link itself adds uncertainty. Prefer using the original full link directly.",
         "hebrew_phishing_page_signals": "The page content in Hebrew includes phishing-style pressure/action terms.",
         "hebrew_content_foreign_infra_mismatch": "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
         "tld_country_notice": "Domain suffix points to a specific country.",
@@ -514,7 +515,7 @@ I18N = {
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
         "at_sign_userinfo": "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
-        "case_confusable": "הדומיין משתמש בערבוב אותיות גדולות/קטנות כדי להטעות חזותית.",
+        "case_confusable": "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
         "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
         "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
         "punycode": "הקישור משתמש בפורמט דומיין מקודד (IDN).",
@@ -557,6 +558,7 @@ I18N = {
         "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
         "short_http_to_https_caution": "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
         "short_https_to_http_downgrade": "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
+        "shortlink_use_original_recommended": "היעד הסופי נראה בטוח, אך קישור מקוצר מוסיף אי-ודאות. מומלץ להשתמש ישירות בקישור המלא המקורי.",
         "hebrew_phishing_page_signals": "בתוכן הדף בעברית נמצאו מונחי לחץ/פעולה שמאפיינים פישינג.",
         "hebrew_content_foreign_infra_mismatch": "התוכן בדף בעברית, אבל תשתית הדומיין אינה תואמת בדרך כלל לשירות שפונה לקהל עברי.",
         "tld_country_notice": "סיומת הדומיין מצביעה על מדינה מסוימת.",
@@ -1280,11 +1282,20 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         context["lookalike_target"] = lookalike_target
 
     # Rule: suspicious case-mixing (e.g. iI) is a strong phishing indicator.
-    has_upper = any(ch.isalpha() and ch.isupper() for ch in host_case_raw)
+    # Ignore an uppercase first character only (common auto-capitalization),
+    # and trigger only when uppercase appears later in the hostname.
+    upper_positions = [
+        (idx, ch)
+        for idx, ch in enumerate(host_case_raw)
+        if ch.isalpha() and ch.isupper()
+    ]
     has_lower = any(ch.isalpha() and ch.islower() for ch in host_case_raw)
-    if has_upper and has_lower:
+    suspicious_upper = next((ch for idx, ch in upper_positions if idx > 0), "")
+    if has_lower and suspicious_upper:
         score += 70
         reasons.append("case_confusable")
+        context["case_confusable_char"] = suspicious_upper
+        context["case_confusable_lower_host"] = host_case_raw.lower()
 
     # Rule: URLs with userinfo (@) are a classic phishing obfuscation trick.
     if "@" in netloc_raw:
@@ -2591,6 +2602,29 @@ def analyze():
         reason_keys.append("short_https_to_http_downgrade")
         total_score = max(total_score, 45)
 
+    # Favor final trusted destination over shortener reputation alone, while
+    # still keeping user guidance about short-link uncertainty.
+    shortlink_hard_risk_keys = {
+        "brand_mismatch",
+        "lookalike_brand",
+        "at_sign_userinfo",
+        "vt_malicious",
+        "gsb_malicious",
+        "urlscan_malicious",
+        "short_https_to_http_downgrade",
+    }
+    shortlink_intel_bad = any(
+        k in reason_keys for k in {"vt_malicious", "vt_suspicious", "urlscan_malicious", "urlscan_suspicious", "gsb_malicious", "gsb_suspicious"}
+    )
+    shortlink_message_warning = any(k in MESSAGE_WARNING_KEYS for k in reason_keys)
+    if trusted_shortlink_destination and short_link_resolved:
+        reason_keys.append("shortlink_use_original_recommended")
+        if not any(k in reason_keys for k in shortlink_hard_risk_keys):
+            if not shortlink_intel_bad and not shortlink_message_warning:
+                total_score = min(total_score, 18)
+            else:
+                total_score = min(total_score, 35)
+
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
     hostname = (parsed.hostname or "").lower()
     tld, tld_country_code = _country_from_tld(hostname)
@@ -2723,6 +2757,7 @@ def analyze():
         "insufficient_trust_signals",
         "short_link_expanded",
         "short_link_destination_blocked",
+        "shortlink_use_original_recommended",
         "tld_country_notice",
         "gsb_unavailable",
         "vt_clean",
@@ -2832,6 +2867,8 @@ def analyze():
             "lookalike_target": url_context.get("lookalike_target", ""),
             "lookalike_seen": url_context.get("lookalike_seen", ""),
             "brand_target": url_context.get("brand_target", ""),
+            "case_confusable_char": url_context.get("case_confusable_char", ""),
+            "case_confusable_lower_host": url_context.get("case_confusable_lower_host", ""),
             "domain_tld": url_context.get("domain_tld", ""),
             "tld_country_code": url_context.get("tld_country_code", ""),
             "page_audience": url_context.get("page_audience", ""),
