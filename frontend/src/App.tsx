@@ -434,11 +434,6 @@ export function App() {
   const riskDesc = (level: RiskLevel) =>
     level === "Low" ? t.safeDesc : level === "Medium" ? t.mediumDesc : t.highDesc;
 
-  const strongerRiskLevel = (a: RiskLevel, b: RiskLevel): RiskLevel => {
-    const rank: Record<RiskLevel, number> = { Low: 0, Medium: 1, High: 2 };
-    return rank[a] >= rank[b] ? a : b;
-  };
-
   const getGreenCheckLabel = (check: GreenCheck): string => {
     if (check.key === "domain_age_180d") {
       const base = language === "he" ? "ותק האתר מעל 180 יום" : "Website age over 180 days";
@@ -585,7 +580,6 @@ export function App() {
 
         if (!startData.final && startData.analysis_id) {
           let gotFinal = false;
-          let latestLiveRisk = (startData.risk_level || "Low") as RiskLevel;
           const pollStartedAt = Date.now();
           for (let i = 0; i < 30; i += 1) {
             await new Promise((resolve) => setTimeout(resolve, 2300));
@@ -604,7 +598,6 @@ export function App() {
               steps: (statusData.steps || []) as LiveStep[],
             });
             setResult((statusData.result || null) as AnalysisResponse | null);
-            latestLiveRisk = (statusData.risk_level || latestLiveRisk) as RiskLevel;
             if (statusData.final) {
               gotFinal = true;
               setCountdownSec(0);
@@ -623,20 +616,15 @@ export function App() {
             if (runToken !== pollTokenRef.current) return;
             if (finalResp.ok) {
               const finalData = (await finalResp.json()) as AnalysisResponse;
-              const monotonicRisk = strongerRiskLevel(
-                latestLiveRisk,
-                (finalData.risk_level || "Low") as RiskLevel
-              );
-              if (monotonicRisk !== finalData.risk_level) {
-                finalData.risk_level = monotonicRisk;
-              }
+              // Trust the authoritative /analyze body: inflating risk_level here without
+              // updating link_verdict/domain_verdict caused a misleading split UI.
               setResult(finalData);
               setLiveMeta({
                 analysis_id: startData.analysis_id || "",
                 final: true,
                 stage: 3,
                 progress: 100,
-                risk_level: monotonicRisk,
+                risk_level: (finalData.risk_level || "Low") as RiskLevel,
                 status_text: t.analysisCompleted,
                 steps: [
                   { key: "stage_1", label: "URL analysis", status: "done" },

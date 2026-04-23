@@ -2390,12 +2390,12 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         if _risk_to_rank(refreshed_level) < _risk_to_rank(previous_level):
             final_result["risk_level"] = previous_level
 
+    # Full /analyze output is authoritative for cached JSON. Do not merge a higher
+    # stage-2 headline risk into risk_level without updating link_verdict/domain_verdict —
+    # that produced contradictory UI (e.g. High banner with both split rows green).
     candidate = str(final_result.get("risk_level", "Low"))
-    final_level = _escalate_level(stage2_level, candidate)
-    if final_level != candidate:
-        final_result["risk_level"] = final_level
-        final_result["is_green_safe"] = False
-        final_result["score"] = max(int(final_result.get("score", 0) or 0), 61 if final_level == "High" else 30)
+    final_level = candidate
+    final_result["risk_level"] = final_level
     final_result["live_monotonic"] = True
 
     with LIVE_LOCK:
