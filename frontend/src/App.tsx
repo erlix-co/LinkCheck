@@ -198,7 +198,7 @@ const translations = {
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
-    footer: "מופעל על ידי Erlix",
+    footer: "מופעל על ידי Erlix.net",
     footerTerms: "תנאי שימוש",
     footerContact: "צור קשר",
     footerReport: "דיווח על תקלה",
