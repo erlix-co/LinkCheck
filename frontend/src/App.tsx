@@ -164,7 +164,7 @@ const translations = {
     messagePlaceholder: "הדבק כאן את ההודעה שקיבלת...",
     urlLabel: "או רק את הקישור",
     urlPlaceholder: "https://example.com",
-    scan: "🚨 בדיקה עכשיו 🚨",
+    scan: "בדיקה",
     scanning: "בודק...",
     scanHint: "",
     needInput: "יש להזין קישור או הודעה.",
