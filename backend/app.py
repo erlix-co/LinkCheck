@@ -291,6 +291,7 @@ SHORTENER_DOMAINS = (
     "rebrand.ly",
     "shorturl.at",
     "shorten.as",
+    "did.li",
 )
 NON_WARNING_LOCAL_KEYS = {"short_link_expanded", "short_link_destination_blocked", "tld_country_notice"}
 WEAK_LOCAL_WARNING_KEYS = {"brand", "suspicious_words", "long_url", "many_hyphens"}
@@ -1047,12 +1048,13 @@ def _html_interstitial_or_block_page(r: requests.Response) -> bool:
     if "text/html" not in ct:
         return False
     head = (r.text or "")[:20000].lower()
+    # Keep markers specific: the substring "interstitial" appears in normal SPA
+    # bundles (e.g. WhatsApp web) and must not classify real destinations as blocks.
     markers = (
         "dns blocking",
         "sinkhole",
         "blocked page",
         "a1 | dns blocking",
-        "interstitial",
         "connection blocked",
         "zugriff verweigert",
     )
@@ -1131,7 +1133,14 @@ def expand_short_url(url: str) -> tuple[str, list[str], list[str]]:
     if last_resp is not None and _html_interstitial_or_block_page(last_resp):
         reason_keys.append("short_link_expanded")
         reason_keys.append("short_link_destination_blocked")
-        final = canonical_start
+        # If the last hop landed on a known-trusted host (e.g. api.whatsapp.com), keep it for
+        # analysis even when HTML heuristics misfire on legitimate SPA content.
+        cand_host = (urlparse(current).hostname or "").lower()
+        cand_reg = get_registrable_domain(cand_host) if cand_host else ""
+        if cand_reg in TRUSTED_ROOT_DOMAINS:
+            final = current
+        else:
+            final = canonical_start
         return final, reason_keys, redirect_chain
 
     if len(redirect_chain) > 1:
