@@ -68,6 +68,8 @@ LIVE_ANALYSIS_JOBS: dict[str, dict] = {}
 LIVE_ANALYSIS_CACHE: dict[str, dict] = {}
 GSB_RESULT_CACHE: dict[str, dict] = {}
 GSB_DISABLED_UNTIL_TS = 0.0
+# Bump when live-result semantics change to invalidate stale in-memory cache entries.
+LIVE_CACHE_SCHEMA_VERSION = os.getenv("LIVE_CACHE_SCHEMA_VERSION", "2")
 LIVE_LOCK = threading.Lock()
 WHOIS_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 WEBHOOK_DEPLOY_LOCK = threading.Lock()
@@ -2299,9 +2301,9 @@ def _live_cache_key(submitted_url: str, message: str, language: str) -> str:
     """
     normalized_url = normalize_url_for_checks(submitted_url) or ""
     normalized_message = " ".join((message or "").split())
-    blob = f"{language}\n{normalized_url}\n{normalized_message}"
+    blob = f"{LIVE_CACHE_SCHEMA_VERSION}\n{language}\n{normalized_url}\n{normalized_message}"
     digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
-    return f"{normalized_url}::{digest[:20]}"
+    return f"v{LIVE_CACHE_SCHEMA_VERSION}:{normalized_url}::{digest[:20]}"
 
 
 def _run_full_analysis_internal(payload: dict) -> dict:
