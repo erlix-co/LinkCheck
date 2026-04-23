@@ -1515,6 +1515,10 @@ def build_ai_model_summary(
         f"Respond strictly in {response_language}.\n"
         "Write 2-4 short sentences, plain language for non-technical users.\n"
         "Must explain risk by combining message text and technical findings.\n"
+        "State only findings explicitly present in reason_keys/domain_verdict.\n"
+        "Do not claim a URL is blocked, malicious, or confirmed dangerous unless one of these appears: "
+        "vt_malicious, urlscan_malicious, gsb_malicious, brand_mismatch.\n"
+        "If a short URL redirects to a trusted final domain and no malicious key exists, phrase it as cautionary but low risk.\n"
         "If there is country mismatch or suspicious short/final URL behavior, mention it clearly.\n"
         "Do not output JSON.\n\n"
         f"message: {message or '[No message provided]'}\n"
@@ -2210,6 +2214,19 @@ def _cache_set(url_key: str, result: dict) -> None:
         LIVE_ANALYSIS_CACHE[url_key] = {"ts": time.time(), "result": result}
 
 
+def _live_cache_key(submitted_url: str, message: str, language: str) -> str:
+    """
+    Cache key for live analysis.
+    Includes URL + normalized message + language to avoid returning stale text/context
+    from a previous scan of the same URL.
+    """
+    normalized_url = normalize_url_for_checks(submitted_url) or ""
+    normalized_message = " ".join((message or "").split())
+    blob = f"{language}\n{normalized_url}\n{normalized_message}"
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return f"{normalized_url}::{digest[:20]}"
+
+
 def _run_full_analysis_internal(payload: dict) -> dict:
     """Reuse existing /analyze logic as final-stage engine without changing current behavior."""
     try:
@@ -2251,6 +2268,8 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
     submitted_url = normalize_url_for_checks(raw_url or extract_first_url(message))
+    cache_key = _live_cache_key(submitted_url, message, language)
+
     if not submitted_url:
         with LIVE_LOCK:
             job = LIVE_ANALYSIS_JOBS.get(job_id)
@@ -2290,7 +2309,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
             stage1_snapshot["risk_level"] = "High"
             job["result"] = stage1_snapshot
             job["status_text"] = t(language, "live_high_risk_early")
-        _cache_set(submitted_url, stage1_snapshot)
+        _cache_set(cache_key, stage1_snapshot)
         return
 
     # Stage 2: redirect/domain consistency
@@ -2371,7 +2390,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["status_text"] = t(language, "live_completed")
         job["result"] = final_result
 
-    _cache_set(submitted_url, final_result)
+    _cache_set(cache_key, final_result)
 
 
 @app.post("/analyze")
@@ -2494,13 +2513,35 @@ def analyze():
             intel_reason_keys.extend(gsb_reason_keys)
             intel_key = gsb_note_key
 
+    # If a short link resolves to a known trusted destination (e.g. whatsapp.com),
+    # evaluate external intel by the final destination to avoid false-red from the
+    # shortener reputation itself.
+    submitted_intel_url = canonicalize_url_for_external_intel(normalized_submitted)
+    final_intel_url = canonicalize_url_for_external_intel(url_to_check)
+    submitted_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
+    final_host = (urlparse(url_to_check).hostname or "").lower() if url_to_check else ""
+    final_registrable = get_registrable_domain(final_host) if final_host else ""
+    trusted_shortlink_destination = (
+        was_short_link
+        and short_link_resolved
+        and bool(final_intel_url)
+        and final_registrable in TRUSTED_ROOT_DOMAINS
+        and submitted_intel_url != final_intel_url
+        and submitted_host != final_host
+    )
+
     # Double-check short-link source and final destination to keep verdicts aligned.
     checked_targets: list[str] = []
-    if normalized_submitted:
-        checked_targets.append(normalized_submitted)
-    if url_to_check and canonicalize_url_for_external_intel(url_to_check) != canonicalize_url_for_external_intel(normalized_submitted):
+    if trusted_shortlink_destination:
+        checked_targets.append(url_to_check)
+    else:
+        if normalized_submitted:
+            checked_targets.append(normalized_submitted)
+    if url_to_check and final_intel_url != submitted_intel_url:
         checked_targets.append(url_to_check)
 
+    # Preserve order and avoid duplicate external lookups.
+    checked_targets = list(dict.fromkeys(checked_targets))
     for target_url in checked_targets:
         _query_external_intel(target_url)
 
@@ -2814,7 +2855,8 @@ def analyze_live_start():
     if not submitted_url:
         return jsonify({"ok": False, "error": "need_input", "reasons": [t(language, "need_input")]}), 400
 
-    cached = _cache_get(submitted_url)
+    cache_key = _live_cache_key(submitted_url, message, language)
+    cached = _cache_get(cache_key)
     if cached:
         return jsonify(
             {
