@@ -2897,16 +2897,10 @@ def analyze_live_status(analysis_id: str):
 @app.route("/webhook", methods=["POST"])
 @limiter.limit("60 per minute")
 def github_webhook():
-    print("WEBHOOK HIT")
     """Receive GitHub webhook and trigger deploy script asynchronously."""
     raw_body = request.get_data() or b""
     event = (request.headers.get("X-GitHub-Event") or "").strip().lower()
-
     payload = request.get_json(silent=True) or {}
-
-    print("EVENT:", event)
-    print("REF:", payload.get("ref"))
-
     signature = (request.headers.get("X-Hub-Signature-256") or "").strip()
     secret = (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
 
@@ -2931,8 +2925,7 @@ def github_webhook():
     except Exception:
         return jsonify({"ok": False, "error": "invalid_payload"}), 400
 
-    print("EVENT:", event)
-    print("REF:", payload.get("ref"))
+
     if payload.get("ref") != "refs/heads/main":
         return jsonify({"ok": True, "ignored": "non_main_branch"})
 
@@ -2950,8 +2943,6 @@ def github_webhook():
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         with open(log_path, "ab") as log_file:
-            print("STARTING DEPLOY SCRIPT")
-            print("RUNNING DEPLOY SCRIPT")
             WEBHOOK_DEPLOY_PROCESS = subprocess.Popen(
                 ["/bin/bash", script_path],
                 stdout=log_file,
