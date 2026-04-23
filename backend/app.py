@@ -2901,6 +2901,12 @@ def github_webhook():
     """Receive GitHub webhook and trigger deploy script asynchronously."""
     raw_body = request.get_data() or b""
     event = (request.headers.get("X-GitHub-Event") or "").strip().lower()
+
+    payload = request.get_json(silent=True) or {}
+
+    print("EVENT:", event)
+    print("REF:", payload.get("ref"))
+
     signature = (request.headers.get("X-Hub-Signature-256") or "").strip()
     secret = (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
 
