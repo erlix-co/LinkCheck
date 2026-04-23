@@ -463,7 +463,12 @@ export function App() {
         if (!data.ai_model_summary) return true;
         return !["ai_model_social_engineering", "ai_model_impersonation", "ai_model_sensitive_action"].includes(key);
       });
-      return filteredKeys.map((key) => {
+      const priorityKeys = ["short_https_to_http_downgrade", "short_http_to_https_caution"];
+      const orderedKeys = [
+        ...priorityKeys.filter((k) => filteredKeys.includes(k)),
+        ...filteredKeys.filter((k) => !priorityKeys.includes(k)),
+      ];
+      return orderedKeys.map((key) => {
         if (key === "lookalike_brand") {
           const target = (data.lookalike_target || "").trim();
           if (target) {
@@ -496,6 +501,8 @@ export function App() {
   };
 
   const getReasonIcon = (key: string): string => {
+    if (key === "short_http_to_https_caution" || key === "short_https_to_http_downgrade")
+      return "\u26D4";
     if (
       key.startsWith("vt_clean") ||
       key.startsWith("urlscan_clean") ||
