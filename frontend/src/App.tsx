@@ -785,7 +785,7 @@ export function App() {
 
       {/* Header */}
       <header className="header">
-        <a href="https://erlix.net/" className="header__logo-wrap header__logo-link" aria-label="Erlix home page">
+        <a href="https://erlix.net/linkcheck/" className="header__logo-wrap header__logo-link" aria-label="LinkCheck page">
           <div className="header__logo-glow" />
           <img src={linkCheckLogo} alt="LinkCheck" className="header__logo header__logo--linkcheck" />
         </a>
