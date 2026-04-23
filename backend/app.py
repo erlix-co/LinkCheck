@@ -443,9 +443,9 @@ I18N = {
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
         "at_sign_userinfo": "URL uses '@' to hide the real destination domain.",
-        "case_confusable": "Website address uses a misleading uppercase character pattern.",
-        "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
-        "unicode_lookalike": "Link uses lookalike Unicode characters.",
+        "case_confusable": "Suspicious mixed letter casing in the hostname.",
+        "mixed_scripts": "Hostname mixes alphabets; a non-Latin lookalike character was flagged.",
+        "unicode_lookalike": "Hostname uses a Unicode letter that resembles Latin (homoglyph).",
         "punycode": "Link uses encoded international domain format (IDN).",
         "suspicious_tld": "Uses a risky domain ending.",
         "long_url": "The link is unusually long.",
@@ -516,9 +516,9 @@ I18N = {
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
         "at_sign_userinfo": "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
-        "case_confusable": "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
-        "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
-        "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
+        "case_confusable": "בשם המארח זוהתה בעיית ערבוב אותיות חשודה.",
+        "mixed_scripts": "בשם המארח מעורבים אלפביתים שונים; סומן תו שאינו אנגלית פשוטה.",
+        "unicode_lookalike": "בשם המארח יש אות יוניקוד שנראית כמו אנגלית (הומוגליף).",
         "punycode": "הקישור משתמש בפורמט דומיין מקודד (IDN).",
         "suspicious_tld": "סיומת הדומיין נחשבת חשודה.",
         "long_url": "הקישור ארוך בצורה חריגה.",
@@ -589,6 +589,45 @@ def t(language: str, key: str, **kwargs) -> str:
     lang = "he" if language == "he" else "en"
     template = I18N[lang][key]
     return template.format(**kwargs) if kwargs else template
+
+
+# Copy onto live snapshots / partial results so UI can name the exact spoof character.
+_SNAPSHOT_URL_CONTEXT_KEYS = (
+    "case_confusable_char",
+    "case_confusable_lower_host",
+    "mixed_scripts_char",
+    "unicode_lookalike_char",
+    "lookalike_target",
+    "lookalike_seen",
+    "brand_target",
+    "brand_seen_domain",
+)
+
+
+def _localized_reason_line(language: str, key: str, ctx: dict) -> str:
+    """Build one human line for API `reasons` when extra hostname context exists."""
+    he = language == "he"
+    if key == "case_confusable":
+        ch = (ctx.get("case_confusable_char") or "").strip()
+        low = (ctx.get("case_confusable_lower_host") or "").strip()
+        if ch:
+            tail = f" צורה מנורמלת להשוואה: {low}" if (he and low) else (f" Normalized for comparison: {low}" if low else "")
+            if he:
+                return f"בשם המארח מופיע התו «{ch}» — אות גדולה באמצע שנועדה להיראות כמו אות קטנה.{tail}"
+            return f'Misleading hostname character «{ch}» (mixed capitals).{tail}'
+    if key == "mixed_scripts":
+        c = (ctx.get("mixed_scripts_char") or "").strip()
+        if c:
+            if he:
+                return f"בשם המארח מופיע התו «{c}» — אות שאינה אנגלית ASCII פשוטה (`a-z`), והערבוב עם לטינית מעלה חשד להטעיה."
+            return f'Hostname mixes scripts; flagged character «{c}» (not plain Latin).'
+    if key == "unicode_lookalike":
+        c = (ctx.get("unicode_lookalike_char") or "").strip()
+        if c:
+            if he:
+                return f"בשם המארח מופיע התו «{c}» — נראה כמו אות לטינית רגילה אך שייך לאלפבית אחר (הומוגליף)."
+            return f'Lookalike Unicode letter «{c}» in hostname (homoglyph).'
+    return t(language, key)
 
 
 def count_term_hits(text: str, terms: tuple[str, ...] | list[str]) -> int:
@@ -729,6 +768,18 @@ def has_mixed_scripts(text: str) -> bool:
         if script != "other":
             scripts.add(script)
     return len(scripts) > 1
+
+
+def _first_non_ascii_latin_letter(hostname: str) -> str:
+    """First hostname letter that is not plain ASCII a–z (any case), for UI callouts."""
+    for ch in hostname:
+        if not ch.isalpha():
+            continue
+        o = ord(ch)
+        if ord("A") <= o <= ord("Z") or ord("a") <= o <= ord("z"):
+            continue
+        return ch
+    return ""
 
 
 def ascii_skeleton(text: str) -> str:
@@ -1256,6 +1307,9 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     if has_mixed_scripts(hostname):
         score += 30
         reasons.append("mixed_scripts")
+        c_mix = _first_non_ascii_latin_letter(hostname)
+        if c_mix:
+            context["mixed_scripts_char"] = c_mix
 
     # Rule: unicode lookalikes that change when mapped to ASCII skeleton.
     if CYRILLIC_OR_GREEK_CHARS.search(hostname):
@@ -1264,6 +1318,9 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         if ascii_only and ascii_only != hostname:
             score += 30
             reasons.append("unicode_lookalike")
+            m_hom = CYRILLIC_OR_GREEK_CHARS.search(hostname)
+            if m_hom:
+                context["unicode_lookalike_char"] = m_hom.group(0)
 
     # Rule: detect lookalike domains (e.g. bank1srael / banklsrael vs bankisrael).
     label = get_primary_label(hostname).replace("-", "")
@@ -2262,14 +2319,18 @@ def _run_full_analysis_internal(payload: dict) -> dict:
 
 
 def _build_stage1_snapshot(submitted_url: str, language: str) -> tuple[str, list[str], dict]:
-    url_score, url_reasons, _ctx = analyze_url(submitted_url)
+    url_score, url_reasons, ctx = analyze_url(submitted_url)
     parsed = urlparse(submitted_url if "://" in submitted_url else f"https://{submitted_url}")
     hostname = (parsed.hostname or "").lower()
     tls_ok = tls_certificate_valid(hostname) if hostname else False
     if hostname and not tls_ok and any(k in url_reasons for k in ("brand_mismatch", "suspicious_tld", "lookalike_brand")):
         url_score = max(url_score, 85)
     risk = _risk_from_score(url_score)
-    reasons = [t(language, key) for key in url_reasons] if url_reasons else [t(language, "safe_now")]
+    reasons = (
+        [_localized_reason_line(language, key, ctx) for key in url_reasons]
+        if url_reasons
+        else [t(language, "safe_now")]
+    )
     snapshot = {
         "score": url_score,
         "risk_level": risk,
@@ -2280,6 +2341,10 @@ def _build_stage1_snapshot(submitted_url: str, language: str) -> tuple[str, list
         "reason_keys": url_reasons,
         "reasons": reasons,
     }
+    for detail_key in _SNAPSHOT_URL_CONTEXT_KEYS:
+        val = ctx.get(detail_key)
+        if val:
+            snapshot[detail_key] = val
     return risk, url_reasons, snapshot
 
 
@@ -2353,7 +2418,11 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         partial["redirect_chain"] = redirect_chain or [submitted_url]
         merged_keys = list(dict.fromkeys((partial.get("reason_keys") or []) + short_keys))
         partial["reason_keys"] = merged_keys
-        partial["reasons"] = [t(language, k) for k in merged_keys] if merged_keys else [t(language, "safe_now")]
+        partial["reasons"] = (
+            [_localized_reason_line(language, k, partial) for k in merged_keys]
+            if merged_keys
+            else [t(language, "safe_now")]
+        )
         job["result"] = partial
 
     # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
@@ -2390,12 +2459,12 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         if _risk_to_rank(refreshed_level) < _risk_to_rank(previous_level):
             final_result["risk_level"] = previous_level
 
+    # Full /analyze output is authoritative for cached JSON. Do not merge a higher
+    # stage-2 headline risk into risk_level without updating link_verdict/domain_verdict —
+    # that produced contradictory UI (e.g. High banner with both split rows green).
     candidate = str(final_result.get("risk_level", "Low"))
-    final_level = _escalate_level(stage2_level, candidate)
-    if final_level != candidate:
-        final_result["risk_level"] = final_level
-        final_result["is_green_safe"] = False
-        final_result["score"] = max(int(final_result.get("score", 0) or 0), 61 if final_level == "High" else 30)
+    final_level = candidate
+    final_result["risk_level"] = final_level
     final_result["live_monotonic"] = True
 
     with LIVE_LOCK:
@@ -2792,7 +2861,7 @@ def analyze():
         force_low_for_weak_only = True
         is_green_safe = True
 
-    reasons = [t(language, key) for key in reason_keys]
+    reasons = [_localized_reason_line(language, key, url_context) for key in reason_keys]
     intel_note = ""
     if intel_key == "intel_configured":
         intel_note = t(language, intel_key, sources=", ".join(intel_sources))
@@ -2838,7 +2907,11 @@ def analyze():
             if "domain_reputation_warning" not in reason_keys:
                 reason_keys.append("domain_reputation_warning")
     reason_keys = list(dict.fromkeys(reason_keys))
-    reasons = [t(language, key) for key in reason_keys] if reason_keys else [t(language, "safe_now")]
+    reasons = (
+        [_localized_reason_line(language, key, url_context) for key in reason_keys]
+        if reason_keys
+        else [t(language, "safe_now")]
+    )
     link_verdict = {
         "url": url_to_check,
         "risk_level": risk_level,
@@ -2878,6 +2951,8 @@ def analyze():
             "brand_target": url_context.get("brand_target", ""),
             "case_confusable_char": url_context.get("case_confusable_char", ""),
             "case_confusable_lower_host": url_context.get("case_confusable_lower_host", ""),
+            "mixed_scripts_char": url_context.get("mixed_scripts_char", ""),
+            "unicode_lookalike_char": url_context.get("unicode_lookalike_char", ""),
             "domain_tld": url_context.get("domain_tld", ""),
             "tld_country_code": url_context.get("tld_country_code", ""),
             "page_audience": url_context.get("page_audience", ""),

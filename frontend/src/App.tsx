@@ -35,6 +35,8 @@ type AnalysisResponse = {
   brand_target?: string;
   case_confusable_char?: string;
   case_confusable_lower_host?: string;
+  mixed_scripts_char?: string;
+  unicode_lookalike_char?: string;
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
@@ -249,9 +251,9 @@ const reasonI18n = {
     suspicious_words: "The link contains words often used in scam or phishing messages.",
     lookalike_brand: "The site name looks very similar to a well-known brand or website.",
     at_sign_userinfo: "The link uses a trick to hide the real destination.",
-    case_confusable: "The website address uses a suspicious uppercase character.",
-    mixed_scripts: "The link mixes different alphabets, which is a common scam trick.",
-    unicode_lookalike: "The link uses characters that look normal but may be misleading.",
+    case_confusable: "Suspicious mixed letter casing in the hostname.",
+    mixed_scripts: "The hostname mixes scripts; a non-Latin lookalike character was flagged.",
+    unicode_lookalike: "The hostname uses a Unicode letter that resembles Latin (homoglyph).",
     punycode: "The link uses an encoded domain format that can hide misleading characters.",
     suspicious_tld: "The link uses a domain ending that is more commonly abused.",
     long_url: "The link is unusually long, which can be used to hide suspicious parts.",
@@ -309,9 +311,9 @@ const reasonI18n = {
     suspicious_words: "בקישור יש מילים שמופיעות הרבה בהונאות ופישינג.",
     lookalike_brand: "שם האתר דומה מאוד למותג או לאתר מוכר.",
     at_sign_userinfo: "הקישור משתמש בטריק שמסתיר את היעד האמיתי.",
-    case_confusable: "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
-    mixed_scripts: "הקישור מערב כמה סוגי אותיות, וזה טריק נפוץ בהונאות.",
-    unicode_lookalike: "בקישור יש תווים שנראים רגילים, אבל עלולים להטעות.",
+    case_confusable: "בשם המארח זוהתה בעיית ערבוב אותיות חשודה.",
+    mixed_scripts: "בשם המארח מעורבים אלפביתים שונים; סומן תו שאינו אנגלית פשוטה.",
+    unicode_lookalike: "בשם המארח יש אות יוניקוד שנראית כמו אנגלית (הומוגליף).",
     punycode: "הקישור משתמש בפורמט מקודד שיכול להסתיר תווים מטעים.",
     suspicious_tld: "סיומת הדומיין הזאת נפוצה יותר בקישורים בעייתיים.",
     long_url: "הקישור ארוך מהרגיל, ולעיתים זה משמש להסתרת חלקים חשודים.",
@@ -434,11 +436,6 @@ export function App() {
   const riskDesc = (level: RiskLevel) =>
     level === "Low" ? t.safeDesc : level === "Medium" ? t.mediumDesc : t.highDesc;
 
-  const strongerRiskLevel = (a: RiskLevel, b: RiskLevel): RiskLevel => {
-    const rank: Record<RiskLevel, number> = { Low: 0, Medium: 1, High: 2 };
-    return rank[a] >= rank[b] ? a : b;
-  };
-
   const getGreenCheckLabel = (check: GreenCheck): string => {
     if (check.key === "domain_age_180d") {
       const base = language === "he" ? "ותק האתר מעל 180 יום" : "Website age over 180 days";
@@ -503,11 +500,49 @@ export function App() {
         if (key === "case_confusable") {
           const suspiciousChar = (data.case_confusable_char || "").trim();
           const lowerHost = (data.case_confusable_lower_host || "").trim();
-          if (suspiciousChar && lowerHost) {
+          if (suspiciousChar) {
             if (language === "he") {
-              return { key, text: `כתובת האתר משתמשת ב-${suspiciousChar} כדי להטעות. כתיבה תקינה: ${lowerHost}` };
+              const tail = lowerHost ? ` צורה מנורמלת להשוואה: ${lowerHost}` : "";
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${suspiciousChar}» — אות גדולה באמצע שנועדה להיראות כמו אות קטנה.${tail}`,
+              };
             }
-            return { key, text: `The website address uses '${suspiciousChar}' to mislead. Safer lowercase form: ${lowerHost}` };
+            const tail = lowerHost ? ` Normalized form for comparison: ${lowerHost}` : "";
+            return {
+              key,
+              text: `The hostname contains the misleading character «${suspiciousChar}» (mixed capitals).${tail}`,
+            };
+          }
+        }
+        if (key === "mixed_scripts") {
+          const c = (data.mixed_scripts_char || "").trim();
+          if (c) {
+            if (language === "he") {
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${c}» — אות שאינה אנגלית ASCII פשוטה (\`a-z\`), והערבוב עם לטינית מעלה חשד להטעיה.`,
+              };
+            }
+            return {
+              key,
+              text: `The hostname contains «${c}» — a non-plain-Latin letter mixed with Latin, which is a common spoofing trick.`,
+            };
+          }
+        }
+        if (key === "unicode_lookalike") {
+          const c = (data.unicode_lookalike_char || "").trim();
+          if (c) {
+            if (language === "he") {
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${c}» — נראה כמו אות לטינית רגילה אך שייך לאלפבית אחר (הומוגליף).`,
+              };
+            }
+            return {
+              key,
+              text: `The hostname contains «${c}» — a Unicode letter that looks like ordinary Latin but is not (homoglyph).`,
+            };
           }
         }
         return { key, text: reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key };
@@ -585,7 +620,6 @@ export function App() {
 
         if (!startData.final && startData.analysis_id) {
           let gotFinal = false;
-          let latestLiveRisk = (startData.risk_level || "Low") as RiskLevel;
           const pollStartedAt = Date.now();
           for (let i = 0; i < 30; i += 1) {
             await new Promise((resolve) => setTimeout(resolve, 2300));
@@ -604,7 +638,6 @@ export function App() {
               steps: (statusData.steps || []) as LiveStep[],
             });
             setResult((statusData.result || null) as AnalysisResponse | null);
-            latestLiveRisk = (statusData.risk_level || latestLiveRisk) as RiskLevel;
             if (statusData.final) {
               gotFinal = true;
               setCountdownSec(0);
@@ -623,20 +656,15 @@ export function App() {
             if (runToken !== pollTokenRef.current) return;
             if (finalResp.ok) {
               const finalData = (await finalResp.json()) as AnalysisResponse;
-              const monotonicRisk = strongerRiskLevel(
-                latestLiveRisk,
-                (finalData.risk_level || "Low") as RiskLevel
-              );
-              if (monotonicRisk !== finalData.risk_level) {
-                finalData.risk_level = monotonicRisk;
-              }
+              // Trust the authoritative /analyze body: inflating risk_level here without
+              // updating link_verdict/domain_verdict caused a misleading split UI.
               setResult(finalData);
               setLiveMeta({
                 analysis_id: startData.analysis_id || "",
                 final: true,
                 stage: 3,
                 progress: 100,
-                risk_level: monotonicRisk,
+                risk_level: (finalData.risk_level || "Low") as RiskLevel,
                 status_text: t.analysisCompleted,
                 steps: [
                   { key: "stage_1", label: "URL analysis", status: "done" },
@@ -722,14 +750,8 @@ export function App() {
     hasSubdomainFocus &&
       result?.reason_keys?.some((k) => k === "brand_mismatch" || k === "lookalike_brand" || k === "brand")
   );
-  const shouldShowResult =
-    Boolean(result) && (
-      !liveMeta ||
-      liveMeta.final ||
-      liveMeta.risk_level === "High" ||
-      result?.risk_level === "High" ||
-      (liveMeta.stage >= 2 && result?.risk_level !== "Low")
-    );
+  // Show verdict/details only after live pipeline reports final (countdown covers the wait).
+  const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final);
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -860,8 +882,8 @@ export function App() {
           </div>
         )}
 
-        {/* Live progress (always visible during live analysis) */}
-        {liveMeta && !loading && (
+        {/* Live progress + countdown only while analysis is still running */}
+        {liveMeta && !loading && !liveMeta.final && (
           <div className="result-section live-progress">
             <div className="result-section__title">{t.analysisSteps}</div>
             <div className="live-progress__status">
