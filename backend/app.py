@@ -3,6 +3,9 @@ import json
 import logging
 import os
 import re
+import hmac
+import hashlib
+import subprocess
 import smtplib
 import threading
 import io
@@ -67,6 +70,8 @@ GSB_RESULT_CACHE: dict[str, dict] = {}
 GSB_DISABLED_UNTIL_TS = 0.0
 LIVE_LOCK = threading.Lock()
 WHOIS_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+WEBHOOK_DEPLOY_LOCK = threading.Lock()
+WEBHOOK_DEPLOY_PROCESS: subprocess.Popen | None = None
 
 
 def _production_mode() -> bool:
@@ -2887,6 +2892,64 @@ def analyze_live_status(analysis_id: str):
             "result": job.get("result", {}),
         }
     return jsonify(response)
+
+
+@app.post("/webhook")
+@limiter.limit("60 per minute")
+def github_webhook():
+    """Receive GitHub webhook and trigger deploy script asynchronously."""
+    raw_body = request.get_data() or b""
+    event = (request.headers.get("X-GitHub-Event") or "").strip().lower()
+    signature = (request.headers.get("X-Hub-Signature-256") or "").strip()
+    secret = (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
+
+    if not secret:
+        return jsonify({"ok": False, "error": "webhook_not_configured"}), 503
+
+    expected_signature = "sha256=" + hmac.new(
+        secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, signature):
+        return jsonify({"ok": False, "error": "invalid_signature"}), 401
+
+    if event == "ping":
+        return jsonify({"ok": True, "message": "pong"})
+    if event != "push":
+        return jsonify({"ok": True, "ignored": event})
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid_payload"}), 400
+
+    if payload.get("ref") != "refs/heads/main":
+        return jsonify({"ok": True, "ignored": "non_main_branch"})
+
+    script_path = (os.getenv("DEPLOY_SCRIPT_PATH") or "/root/erlix/linkcheck/deploy.sh").strip()
+    log_path = (os.getenv("DEPLOY_LOG_PATH") or "/root/erlix/linkcheck/deploy-webhook.log").strip()
+    if not os.path.exists(script_path):
+        return jsonify({"ok": False, "error": "deploy_script_missing"}), 500
+
+    global WEBHOOK_DEPLOY_PROCESS
+    with WEBHOOK_DEPLOY_LOCK:
+        if WEBHOOK_DEPLOY_PROCESS and WEBHOOK_DEPLOY_PROCESS.poll() is None:
+            return jsonify({"ok": True, "status": "deploy_already_running"}), 202
+
+        log_dir = os.path.dirname(log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        with open(log_path, "ab") as log_file:
+            WEBHOOK_DEPLOY_PROCESS = subprocess.Popen(
+                ["/bin/bash", script_path],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd="/root/erlix/linkcheck",
+                start_new_session=True,
+            )
+
+    return jsonify({"ok": True, "status": "deploy_started"}), 202
 
 
 def _smtp_configured() -> bool:
