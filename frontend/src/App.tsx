@@ -750,14 +750,8 @@ export function App() {
     hasSubdomainFocus &&
       result?.reason_keys?.some((k) => k === "brand_mismatch" || k === "lookalike_brand" || k === "brand")
   );
-  const shouldShowResult =
-    Boolean(result) && (
-      !liveMeta ||
-      liveMeta.final ||
-      liveMeta.risk_level === "High" ||
-      result?.risk_level === "High" ||
-      (liveMeta.stage >= 2 && result?.risk_level !== "Low")
-    );
+  // Show verdict/details only after live pipeline reports final (countdown covers the wait).
+  const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final);
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -888,8 +882,8 @@ export function App() {
           </div>
         )}
 
-        {/* Live progress (always visible during live analysis) */}
-        {liveMeta && !loading && (
+        {/* Live progress + countdown only while analysis is still running */}
+        {liveMeta && !loading && !liveMeta.final && (
           <div className="result-section live-progress">
             <div className="result-section__title">{t.analysisSteps}</div>
             <div className="live-progress__status">
