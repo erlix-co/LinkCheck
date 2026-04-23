@@ -35,6 +35,8 @@ type AnalysisResponse = {
   brand_target?: string;
   case_confusable_char?: string;
   case_confusable_lower_host?: string;
+  mixed_scripts_char?: string;
+  unicode_lookalike_char?: string;
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
@@ -249,9 +251,9 @@ const reasonI18n = {
     suspicious_words: "The link contains words often used in scam or phishing messages.",
     lookalike_brand: "The site name looks very similar to a well-known brand or website.",
     at_sign_userinfo: "The link uses a trick to hide the real destination.",
-    case_confusable: "The website address uses a suspicious uppercase character.",
-    mixed_scripts: "The link mixes different alphabets, which is a common scam trick.",
-    unicode_lookalike: "The link uses characters that look normal but may be misleading.",
+    case_confusable: "The hostname includes a misleading character (see details for the exact symbol).",
+    mixed_scripts: "The hostname mixes scripts; a non-Latin lookalike character was flagged.",
+    unicode_lookalike: "The hostname uses a Unicode letter that resembles Latin (homoglyph).",
     punycode: "The link uses an encoded domain format that can hide misleading characters.",
     suspicious_tld: "The link uses a domain ending that is more commonly abused.",
     long_url: "The link is unusually long, which can be used to hide suspicious parts.",
@@ -309,9 +311,9 @@ const reasonI18n = {
     suspicious_words: "בקישור יש מילים שמופיעות הרבה בהונאות ופישינג.",
     lookalike_brand: "שם האתר דומה מאוד למותג או לאתר מוכר.",
     at_sign_userinfo: "הקישור משתמש בטריק שמסתיר את היעד האמיתי.",
-    case_confusable: "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
-    mixed_scripts: "הקישור מערב כמה סוגי אותיות, וזה טריק נפוץ בהונאות.",
-    unicode_lookalike: "בקישור יש תווים שנראים רגילים, אבל עלולים להטעות.",
+    case_confusable: "בשם המארח יש תו חריג שעלול להטעות (התו המדויק מופיע בפירוט).",
+    mixed_scripts: "בשם המארח מעורבים אלפביתים שונים; סומן תו שאינו אנגלית פשוטה.",
+    unicode_lookalike: "בשם המארח יש אות יוניקוד שנראית כמו אנגלית (הומוגליף).",
     punycode: "הקישור משתמש בפורמט מקודד שיכול להסתיר תווים מטעים.",
     suspicious_tld: "סיומת הדומיין הזאת נפוצה יותר בקישורים בעייתיים.",
     long_url: "הקישור ארוך מהרגיל, ולעיתים זה משמש להסתרת חלקים חשודים.",
@@ -498,11 +500,49 @@ export function App() {
         if (key === "case_confusable") {
           const suspiciousChar = (data.case_confusable_char || "").trim();
           const lowerHost = (data.case_confusable_lower_host || "").trim();
-          if (suspiciousChar && lowerHost) {
+          if (suspiciousChar) {
             if (language === "he") {
-              return { key, text: `כתובת האתר משתמשת ב-${suspiciousChar} כדי להטעות. כתיבה תקינה: ${lowerHost}` };
+              const tail = lowerHost ? ` צורה מנורמלת להשוואה: ${lowerHost}` : "";
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${suspiciousChar}» — אות גדולה באמצע שנועדה להיראות כמו אות קטנה.${tail}`,
+              };
             }
-            return { key, text: `The website address uses '${suspiciousChar}' to mislead. Safer lowercase form: ${lowerHost}` };
+            const tail = lowerHost ? ` Normalized form for comparison: ${lowerHost}` : "";
+            return {
+              key,
+              text: `The hostname contains the misleading character «${suspiciousChar}» (mixed capitals).${tail}`,
+            };
+          }
+        }
+        if (key === "mixed_scripts") {
+          const c = (data.mixed_scripts_char || "").trim();
+          if (c) {
+            if (language === "he") {
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${c}» — אות שאינה אנגלית ASCII פשוטה (\`a-z\`), והערבוב עם לטינית מעלה חשד להטעיה.`,
+              };
+            }
+            return {
+              key,
+              text: `The hostname contains «${c}» — a non-plain-Latin letter mixed with Latin, which is a common spoofing trick.`,
+            };
+          }
+        }
+        if (key === "unicode_lookalike") {
+          const c = (data.unicode_lookalike_char || "").trim();
+          if (c) {
+            if (language === "he") {
+              return {
+                key,
+                text: `בשם המארח מופיע התו «${c}» — נראה כמו אות לטינית רגילה אך שייך לאלפבית אחר (הומוגליף).`,
+              };
+            }
+            return {
+              key,
+              text: `The hostname contains «${c}» — a Unicode letter that looks like ordinary Latin but is not (homoglyph).`,
+            };
           }
         }
         return { key, text: reasonI18n[language][key as keyof (typeof reasonI18n)["en"]] ?? key };

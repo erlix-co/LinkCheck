@@ -443,9 +443,9 @@ I18N = {
         "suspicious_words": "Contains words commonly used in phishing.",
         "lookalike_brand": "Domain name is almost identical to a known brand/domain (one-character trick).",
         "at_sign_userinfo": "URL uses '@' to hide the real destination domain.",
-        "case_confusable": "Website address uses a misleading uppercase character pattern.",
-        "mixed_scripts": "Link mixes different alphabets (common phishing trick).",
-        "unicode_lookalike": "Link uses lookalike Unicode characters.",
+        "case_confusable": "Hostname includes a misleading character (see highlighted symbol in details).",
+        "mixed_scripts": "Hostname mixes alphabets; a non-Latin lookalike character was flagged.",
+        "unicode_lookalike": "Hostname uses a Unicode letter that resembles Latin (homoglyph).",
         "punycode": "Link uses encoded international domain format (IDN).",
         "suspicious_tld": "Uses a risky domain ending.",
         "long_url": "The link is unusually long.",
@@ -516,9 +516,9 @@ I18N = {
         "suspicious_words": "יש מילים אופייניות לניסיונות פישינג.",
         "lookalike_brand": "שם הדומיין כמעט זהה למותג/דומיין מוכר (טריק של שינוי תו אחד).",
         "at_sign_userinfo": "הקישור משתמש ב-'@' כדי להסתיר את הדומיין האמיתי.",
-        "case_confusable": "כתובת האתר משתמשת באות גדולה בצורה חשודה שעלולה להטעות.",
-        "mixed_scripts": "הקישור מערב כמה סוגי אותיות (טריק פישינג נפוץ).",
-        "unicode_lookalike": "בקישור יש תווי יוניקוד דומים לאותיות רגילות.",
+        "case_confusable": "בשם המארח יש תו חריג שעלול להטעות (התו המדויק מופיע בפירוט).",
+        "mixed_scripts": "בשם המארח מעורבים אלפביתים שונים; סומן תו שאינו אנגלית פשוטה.",
+        "unicode_lookalike": "בשם המארח יש אות יוניקוד שנראית כמו אנגלית (הומוגליף).",
         "punycode": "הקישור משתמש בפורמט דומיין מקודד (IDN).",
         "suspicious_tld": "סיומת הדומיין נחשבת חשודה.",
         "long_url": "הקישור ארוך בצורה חריגה.",
@@ -729,6 +729,18 @@ def has_mixed_scripts(text: str) -> bool:
         if script != "other":
             scripts.add(script)
     return len(scripts) > 1
+
+
+def _first_non_ascii_latin_letter(hostname: str) -> str:
+    """First hostname letter that is not plain ASCII a–z (any case), for UI callouts."""
+    for ch in hostname:
+        if not ch.isalpha():
+            continue
+        o = ord(ch)
+        if ord("A") <= o <= ord("Z") or ord("a") <= o <= ord("z"):
+            continue
+        return ch
+    return ""
 
 
 def ascii_skeleton(text: str) -> str:
@@ -1256,6 +1268,9 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
     if has_mixed_scripts(hostname):
         score += 30
         reasons.append("mixed_scripts")
+        c_mix = _first_non_ascii_latin_letter(hostname)
+        if c_mix:
+            context["mixed_scripts_char"] = c_mix
 
     # Rule: unicode lookalikes that change when mapped to ASCII skeleton.
     if CYRILLIC_OR_GREEK_CHARS.search(hostname):
@@ -1264,6 +1279,9 @@ def analyze_url(url: str) -> tuple[int, list[str], dict]:
         if ascii_only and ascii_only != hostname:
             score += 30
             reasons.append("unicode_lookalike")
+            m_hom = CYRILLIC_OR_GREEK_CHARS.search(hostname)
+            if m_hom:
+                context["unicode_lookalike_char"] = m_hom.group(0)
 
     # Rule: detect lookalike domains (e.g. bank1srael / banklsrael vs bankisrael).
     label = get_primary_label(hostname).replace("-", "")
@@ -2878,6 +2896,8 @@ def analyze():
             "brand_target": url_context.get("brand_target", ""),
             "case_confusable_char": url_context.get("case_confusable_char", ""),
             "case_confusable_lower_host": url_context.get("case_confusable_lower_host", ""),
+            "mixed_scripts_char": url_context.get("mixed_scripts_char", ""),
+            "unicode_lookalike_char": url_context.get("unicode_lookalike_char", ""),
             "domain_tld": url_context.get("domain_tld", ""),
             "tld_country_code": url_context.get("tld_country_code", ""),
             "page_audience": url_context.get("page_audience", ""),
