@@ -2944,7 +2944,7 @@ def github_webhook():
             os.makedirs(log_dir, exist_ok=True)
         with open(log_path, "ab") as log_file:
             WEBHOOK_DEPLOY_PROCESS = subprocess.Popen(
-                ["/bin/bash", script_path],
+                ["nohup", "/bin/bash", script_path],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 cwd="/root/erlix/linkcheck",
