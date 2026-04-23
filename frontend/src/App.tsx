@@ -150,6 +150,7 @@ const translations = {
     reportClose: "Close",
     liveStatus: "Results are updated in real time as more data is analyzed",
     waitingExternal: "Waiting for external analysis...",
+    analysisCompleted: "Analysis completed.",
     analysisSteps: "Analysis steps",
     parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute.",
     countdownLabel: "Estimated time left",
@@ -227,6 +228,7 @@ const translations = {
     reportClose: "סגירה",
     liveStatus: "התוצאות מתעדכנות בזמן אמת ככל שנאסף מידע נוסף",
     waitingExternal: "ממתינים לניתוח חיצוני...",
+    analysisCompleted: "הבדיקה הושלמה.",
     analysisSteps: "שלבי בדיקה",
     parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת כחצי דקה.",
     countdownLabel: "זמן משוער לסיום",
@@ -282,6 +284,10 @@ const reasonI18n = {
     gsb_clean: "Google Safe Browsing did not report this link as unsafe.",
     gsb_unavailable: "Google Safe Browsing check is unavailable right now.",
     short_link_expanded: "HTTP redirects were followed to the final URL.",
+    short_http_to_https_caution:
+      "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
+    short_https_to_http_downgrade:
+      "The short link starts as secure HTTPS but ends at an unsecure page. Avoid entering personal details on the final page.",
     short_link_unresolved: "The full redirect chain could not be followed (error, loop, or blocked hop).",
     short_link_destination_blocked: "Redirects ended on a provider block or interstitial page; analysis uses the link you submitted.",
     hebrew_phishing_page_signals: "The page content in Hebrew includes phishing-style pressure/action terms.",
@@ -336,6 +342,10 @@ const reasonI18n = {
     gsb_clean: "Google Safe Browsing לא סימן את הקישור כלא בטוח.",
     gsb_unavailable: "בדיקת Google Safe Browsing אינה זמינה כרגע.",
     short_link_expanded: "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
+    short_http_to_https_caution:
+      "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
+    short_https_to_http_downgrade:
+      "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
     short_link_unresolved: "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה או צעד חסום).",
     short_link_destination_blocked: "ההפניות הסתיימו בדף חסימה או ביניים של ספק; הניתוח מבוסס על הקישור שהזנת.",
     hebrew_phishing_page_signals: "בתוכן הדף בעברית נמצאו מונחי לחץ או פעולה שמאפיינים פישינג.",
@@ -567,7 +577,7 @@ export function App() {
               stage: Number(statusData.stage || 1),
               progress: Number(statusData.progress || 0),
               risk_level: (statusData.risk_level || "Low") as RiskLevel,
-              status_text: statusData.status_text || (statusData.final ? "Analysis completed." : t.waitingExternal),
+              status_text: statusData.status_text || (statusData.final ? t.analysisCompleted : t.waitingExternal),
               steps: (statusData.steps || []) as LiveStep[],
             });
             setResult((statusData.result || null) as AnalysisResponse | null);
@@ -604,7 +614,7 @@ export function App() {
                 stage: 3,
                 progress: 100,
                 risk_level: monotonicRisk,
-                status_text: "Analysis completed.",
+                status_text: t.analysisCompleted,
                 steps: [
                   { key: "stage_1", label: "URL analysis", status: "done" },
                   { key: "stage_2", label: "Redirect check", status: "done" },
@@ -634,7 +644,7 @@ export function App() {
         stage: 3,
         progress: 100,
         risk_level: (legacy.risk_level || "Low") as RiskLevel,
-        status_text: "Analysis completed.",
+        status_text: t.analysisCompleted,
         steps: [
           { key: "stage_1", label: "URL analysis", status: "done" },
           { key: "stage_2", label: "Redirect check", status: "done" },
@@ -841,7 +851,7 @@ export function App() {
               </span>
             </div>
             <div className="live-progress__status">
-              {liveMeta.final ? t.liveStatus : (liveMeta.status_text || t.waitingExternal)}
+              {liveMeta.status_text || (liveMeta.final ? t.analysisCompleted : t.waitingExternal)}
             </div>
           </div>
         )}

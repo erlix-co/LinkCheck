@@ -478,6 +478,8 @@ I18N = {
         "short_link_expanded": "HTTP redirects were followed to the final URL.",
         "short_link_unresolved": "Could not follow the full redirect chain (error, loop, or blocked hop).",
         "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
+        "short_http_to_https_caution": "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
+        "short_https_to_http_downgrade": "The short link started as secure HTTPS, but the final destination is not secure. Do not enter personal details on the final page.",
         "hebrew_phishing_page_signals": "The page content in Hebrew includes phishing-style pressure/action terms.",
         "hebrew_content_foreign_infra_mismatch": "The page is mainly Hebrew, but the domain infrastructure is atypical for Hebrew-targeted services.",
         "tld_country_notice": "Domain suffix points to a specific country.",
@@ -486,6 +488,14 @@ I18N = {
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
         "insufficient_trust_signals": "Not enough trust signals for a green/safe result.",
+        "live_no_url": "No URL provided.",
+        "live_progress": "Results are updated in real time as more data is analyzed",
+        "live_high_risk_early": "High-risk signal detected. Analysis completed early.",
+        "live_waiting_external": "Waiting for external analysis...",
+        "live_final_verification": "Final verification pass {current}/{total}...",
+        "live_completed": "Analysis completed.",
+        "live_cache_loaded": "Loaded from recent cache.",
+        "live_still_collecting": "Still collecting external checks. Please wait a few more seconds.",
         "explain_lookalike": "Main warning: the domain looks like an imitation of a trusted name (for example, a one-letter change)."
         ,"explain_lookalike_target": "Main warning: the domain '{seen}' is very similar to trusted name '{target}' (possible impersonation)."
         ,"explain_not_high": "There are warning signs, but not enough for high risk. Treat this link carefully."
@@ -540,6 +550,8 @@ I18N = {
         "short_link_expanded": "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
         "short_link_unresolved": "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה, או צעד חסום).",
         "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
+        "short_http_to_https_caution": "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
+        "short_https_to_http_downgrade": "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
         "hebrew_phishing_page_signals": "בתוכן הדף בעברית נמצאו מונחי לחץ/פעולה שמאפיינים פישינג.",
         "hebrew_content_foreign_infra_mismatch": "התוכן בדף בעברית, אבל תשתית הדומיין אינה תואמת בדרך כלל לשירות שפונה לקהל עברי.",
         "tld_country_notice": "סיומת הדומיין מצביעה על מדינה מסוימת.",
@@ -548,6 +560,14 @@ I18N = {
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
         "insufficient_trust_signals": "אין מספיק אותות אמון כדי לתת מצב ירוק/בטוח.",
+        "live_no_url": "לא סופק קישור לבדיקה.",
+        "live_progress": "התוצאות מתעדכנות בזמן אמת ככל שנאסף מידע נוסף",
+        "live_high_risk_early": "זוהה סימן בסיכון גבוה. הבדיקה הושלמה מוקדם.",
+        "live_waiting_external": "ממתינים לניתוח חיצוני...",
+        "live_final_verification": "בדיקת אימות סופית {current}/{total}...",
+        "live_completed": "הבדיקה הושלמה.",
+        "live_cache_loaded": "התוצאה נטענה ממטמון עדכני.",
+        "live_still_collecting": "עדיין נאסף מידע חיצוני. נא להמתין עוד מספר שניות.",
         "explain_lookalike": "האזהרה המרכזית: הדומיין נראה כהתחזות לשם אמין (למשל שינוי של אות אחת)."
         ,"explain_lookalike_target": "האזהרה המרכזית: הדומיין '{seen}' דומה מאוד לשם האמין '{target}' (חשד להתחזות)."
         ,"explain_not_high": "זוהו סימני אזהרה, אבל לא ברמה גבוהה. מומלץ להתייחס לקישור בזהירות."
@@ -1472,7 +1492,9 @@ def build_ai_model_summary(
     tld_country_code: str,
 ) -> str:
     """Dynamic user-facing AI summary synced with final findings."""
-    if not message or not gemini_api_key:
+    has_short_http_context = "short_http_to_https_caution" in (reason_keys or [])
+    has_short_https_downgrade = "short_https_to_http_downgrade" in (reason_keys or [])
+    if not gemini_api_key or (not message and not (has_short_http_context or has_short_https_downgrade)):
         return ""
     response_language = "Hebrew" if language == "he" else "English"
     context_blob = {
@@ -1490,7 +1512,7 @@ def build_ai_model_summary(
         "Must explain risk by combining message text and technical findings.\n"
         "If there is country mismatch or suspicious short/final URL behavior, mention it clearly.\n"
         "Do not output JSON.\n\n"
-        f"message: {message}\n"
+        f"message: {message or '[No message provided]'}\n"
         f"findings: {json.dumps(context_blob, ensure_ascii=False)}\n"
     )
     text = _gemini_generate_text(
@@ -2132,6 +2154,10 @@ def _severity_rank(level: str) -> int:
     return {"Low": 0, "Medium": 1, "High": 2}.get(level, 0)
 
 
+def _risk_to_rank(level: str) -> int:
+    return _severity_rank(level)
+
+
 def _escalate_level(current: str, candidate: str) -> str:
     return current if _severity_rank(current) >= _severity_rank(candidate) else candidate
 
@@ -2228,7 +2254,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
             job["final"] = True
             job["stage"] = 3
             job["progress"] = 100
-            job["status_text"] = "No URL provided."
+            job["status_text"] = t(language, "live_no_url")
         return
 
     current_level, stage1_reasons, stage1_snapshot = _build_stage1_snapshot(submitted_url, language)
@@ -2243,7 +2269,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["risk_level"] = current_level
         job["progress"] = _stage_progress(1, False)
         job["steps"] = _steps_payload(1, False)
-        job["status_text"] = "Results are updated in real time as more data is analyzed"
+        job["status_text"] = t(language, "live_progress")
         job["result"] = stage1_snapshot
 
     if early_red:
@@ -2258,7 +2284,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
             job["steps"] = _steps_payload(3, True)
             stage1_snapshot["risk_level"] = "High"
             job["result"] = stage1_snapshot
-            job["status_text"] = "High-risk signal detected. Analysis completed early."
+            job["status_text"] = t(language, "live_high_risk_early")
         _cache_set(submitted_url, stage1_snapshot)
         return
 
@@ -2275,7 +2301,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["risk_level"] = stage2_level
         job["progress"] = _stage_progress(2, False)
         job["steps"] = _steps_payload(2, False)
-        job["status_text"] = "Waiting for external analysis..."
+        job["status_text"] = t(language, "live_waiting_external")
         # Keep partial data visible while async intel runs.
         partial = dict(stage1_snapshot)
         partial["risk_level"] = stage2_level
@@ -2304,7 +2330,12 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
                 return
             job["stage"] = 3
             job["steps"] = _steps_payload(3, False)
-            job["status_text"] = f"Final verification pass {attempt + 1}/{LIVE_LOW_STABILIZE_RETRIES}..."
+            job["status_text"] = t(
+                language,
+                "live_final_verification",
+                current=attempt + 1,
+                total=LIVE_LOW_STABILIZE_RETRIES,
+            )
         if LIVE_LOW_STABILIZE_DELAY_SEC > 0:
             time.sleep(LIVE_LOW_STABILIZE_DELAY_SEC)
         refreshed = _run_full_analysis_internal(full_payload)
@@ -2332,7 +2363,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["risk_level"] = final_level
         job["progress"] = 100
         job["steps"] = _steps_payload(3, True)
-        job["status_text"] = "Analysis completed."
+        job["status_text"] = t(language, "live_completed")
         job["result"] = final_result
 
     _cache_set(submitted_url, final_result)
@@ -2364,10 +2395,14 @@ def analyze():
     extracted_url = extract_first_url(message)
     submitted_url = raw_url or extracted_url
     normalized_submitted = normalize_url_for_checks(submitted_url)
+    submitted_is_http = normalized_submitted.lower().startswith("http://") if normalized_submitted else False
+    submitted_is_https = normalized_submitted.lower().startswith("https://") if normalized_submitted else False
     expanded_url, short_link_reason_keys, redirect_chain = expand_short_url(normalized_submitted)
     expanded_or_submitted = expanded_url or normalized_submitted
     decoded_url = decode_url_for_analysis(expanded_or_submitted)
     url_to_check = decoded_url or expanded_or_submitted
+    final_is_https = url_to_check.lower().startswith("https://") if url_to_check else False
+    final_is_http = url_to_check.lower().startswith("http://") if url_to_check else False
     original_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
     # Show redirect / short-link trust row when we followed hops OR domain is a known shortener list.
     was_short_link = bool(normalized_submitted) and (
@@ -2504,6 +2539,11 @@ def analyze():
         + model_intent_reason_keys
         + intel_reason_keys
     )
+    if submitted_is_http and final_is_https and short_link_resolved:
+        reason_keys.append("short_http_to_https_caution")
+    if submitted_is_https and final_is_http and short_link_resolved:
+        reason_keys.append("short_https_to_http_downgrade")
+        total_score = max(total_score, 45)
 
     parsed = urlparse(url_to_check if "://" in url_to_check else f"https://{url_to_check}")
     hostname = (parsed.hostname or "").lower()
@@ -2781,7 +2821,7 @@ def analyze_live_start():
                 "progress": 100,
                 "risk_level": cached.get("risk_level", "Low"),
                 "steps": _steps_payload(3, True),
-                "status_text": "Loaded from recent cache.",
+                "status_text": t(language, "live_cache_loaded"),
                 "result": cached,
             }
         )
@@ -2797,7 +2837,7 @@ def analyze_live_start():
             "progress": 33,
             "risk_level": risk_level,
             "steps": _steps_payload(1, False),
-            "status_text": "Results are updated in real time as more data is analyzed",
+            "status_text": t(language, "live_progress"),
             "result": snapshot,
             "payload": {"url": raw_url, "message": message, "language": language},
         }
@@ -2815,7 +2855,7 @@ def analyze_live_start():
             "progress": 33,
             "risk_level": risk_level,
             "steps": _steps_payload(1, False),
-            "status_text": "Results are updated in real time as more data is analyzed",
+            "status_text": t(language, "live_progress"),
             "result": snapshot,
         }
     )
@@ -2833,7 +2873,8 @@ def analyze_live_status(analysis_id: str):
             # Do not mark partial data as final; avoid early "safe/green" impressions.
             job["stage"] = max(2, int(job.get("stage", 1)))
             job["progress"] = _stage_progress(job["stage"], False)
-            job["status_text"] = "Still collecting external checks. Please wait a few more seconds."
+            language = "he" if (job.get("payload", {}).get("language", "") or "").lower() == "he" else "en"
+            job["status_text"] = t(language, "live_still_collecting")
         response = {
             "ok": True,
             "analysis_id": analysis_id,
