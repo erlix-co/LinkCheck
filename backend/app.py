@@ -2894,7 +2894,7 @@ def analyze_live_status(analysis_id: str):
     return jsonify(response)
 
 
-@app.post("/webhook")
+@app.route("/webhook", methods=["POST"])
 @limiter.limit("60 per minute")
 def github_webhook():
     print("WEBHOOK HIT")
