@@ -3171,3 +3171,34 @@ def report_issue():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+# חיבור דף הבית לשרת אוטומטית
+
+@app.route('/webhook-home', methods=['POST'])
+def webhook_home():
+    import subprocess, os, hmac, hashlib
+
+    raw_body = request.get_data() or b""
+    signature = (request.headers.get("X-Hub-Signature-256") or "").strip()
+    secret = (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
+
+    # אימות חתימה
+    if not signature or not secret:
+        return jsonify({"ok": False, "error": "missing_signature"}), 403
+
+    mac = hmac.new(secret.encode(), msg=raw_body, digestmod=hashlib.sha256)
+    expected = "sha256=" + mac.hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        return jsonify({"ok": False, "error": "invalid_signature"}), 403
+
+    # להריץ deploy של דף הבית
+    subprocess.Popen(
+        ["nohup", "/bin/bash", "/root/erlix/home-deploy.sh"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    return jsonify({"ok": True, "status": "home_deploy_started"}), 202
