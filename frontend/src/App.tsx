@@ -399,7 +399,7 @@ export function App() {
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [liveMeta, setLiveMeta] = useState<LiveMeta | null>(null);
-  const [countdownSec, setCountdownSec] = useState(30);
+  const [countdownSec, setCountdownSec] = useState(40);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -521,7 +521,7 @@ export function App() {
     setError("");
     setResult(null);
     setLiveMeta(null);
-    setCountdownSec(30);
+    setCountdownSec(40);
 
     if (!termsAccepted) {
       setError(t.termsRequired);
