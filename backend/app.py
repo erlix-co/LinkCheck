@@ -2276,6 +2276,27 @@ def _stage_progress(stage: int, final: bool) -> int:
     return {1: 33, 2: 66, 3: 100}.get(stage, 0)
 
 
+def _normalize_live_result_consistency(result: dict | None) -> dict | None:
+    """
+    Guard against stale cached payloads where top risk_level no longer matches
+    finalized link/domain verdict objects after logic updates.
+    """
+    if not isinstance(result, dict):
+        return result
+    normalized = dict(result)
+    top_level = str(normalized.get("risk_level", "Low") or "Low")
+    link_verdict = normalized.get("link_verdict") or {}
+    link_level = str(link_verdict.get("risk_level", "") or "")
+    allowed = {"Low", "Medium", "High"}
+    if top_level in allowed and link_level in allowed and top_level != link_level:
+        normalized["risk_level"] = link_level
+        link_score = link_verdict.get("score")
+        if isinstance(link_score, (int, float)):
+            normalized["score"] = int(link_score)
+        normalized["is_green_safe"] = link_level == "Low"
+    return normalized
+
+
 def _cache_get(url_key: str) -> dict | None:
     now = time.time()
     with LIVE_LOCK:
@@ -2285,12 +2306,15 @@ def _cache_get(url_key: str) -> dict | None:
         if now - float(payload.get("ts", 0)) > LIVE_CACHE_TTL_SEC:
             LIVE_ANALYSIS_CACHE.pop(url_key, None)
             return None
-        return payload.get("result")
+        return _normalize_live_result_consistency(payload.get("result"))
 
 
 def _cache_set(url_key: str, result: dict) -> None:
     with LIVE_LOCK:
-        LIVE_ANALYSIS_CACHE[url_key] = {"ts": time.time(), "result": result}
+        LIVE_ANALYSIS_CACHE[url_key] = {
+            "ts": time.time(),
+            "result": _normalize_live_result_consistency(result) or result,
+        }
 
 
 def _live_cache_key(submitted_url: str, message: str, language: str) -> str:
