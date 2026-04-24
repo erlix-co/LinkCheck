@@ -887,6 +887,14 @@ def get_registrable_domain(hostname: str) -> str:
     return host
 
 
+def _strip_leading_www(hostname: str) -> str:
+    """Normalize host comparisons by ignoring a leading www label."""
+    host = (hostname or "").lower().strip(".")
+    if host.startswith("www."):
+        return host[4:]
+    return host
+
+
 def brand_key_for_canonical_domain(domain: str) -> str:
     value = (domain or "").lower().strip(".")
     if not value:
@@ -2640,8 +2648,8 @@ def analyze():
     # shortener reputation itself.
     submitted_intel_url = canonicalize_url_for_external_intel(normalized_submitted)
     final_intel_url = canonicalize_url_for_external_intel(url_to_check)
-    submitted_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
-    final_host = (urlparse(url_to_check).hostname or "").lower() if url_to_check else ""
+    submitted_host = _strip_leading_www((urlparse(normalized_submitted).hostname or "")) if normalized_submitted else ""
+    final_host = _strip_leading_www((urlparse(url_to_check).hostname or "")) if url_to_check else ""
     final_registrable = get_registrable_domain(final_host) if final_host else ""
     trusted_shortlink_destination = (
         was_short_link
@@ -2747,7 +2755,7 @@ def analyze():
         if "tld_country_notice" not in reason_keys:
             reason_keys.append("tld_country_notice")
     registrable_domain = get_registrable_domain(hostname) if hostname else ""
-    host_no_www = hostname[4:] if hostname.startswith("www.") else hostname
+    host_no_www = _strip_leading_www(hostname)
     has_subdomains = bool(host_no_www and registrable_domain and host_no_www != registrable_domain)
     potentially_misleading_subdomain = _has_potentially_misleading_subdomain(hostname, registrable_domain)
     social_engineering_hit = (
