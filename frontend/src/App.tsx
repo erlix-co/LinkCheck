@@ -171,6 +171,7 @@ const translations = {
     pendingIntelAutoProgress: "Automatic update in progress",
     pendingIntelAutoDone: "External checks were updated automatically.",
     pendingIntelAutoStillPending: "Some external checks are still updating. Keep this page open; the current result is still valid for now.",
+    forcedDisplayAfterTimeout: "External checks are still updating. Showing the latest available result now (after 60 seconds).",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -257,6 +258,7 @@ const translations = {
     pendingIntelAutoProgress: "מרעננים אוטומטית",
     pendingIntelAutoDone: "הבדיקות החיצוניות עודכנו אוטומטית.",
     pendingIntelAutoStillPending: "חלק מהבדיקות החיצוניות עדיין בעדכון. אפשר להשאיר את הדף פתוח; התוצאה הנוכחית תקפה לעכשיו.",
+    forcedDisplayAfterTimeout: "הבדיקות החיצוניות עדיין מתעדכנות. מוצגת עכשיו התוצאה העדכנית הזמינה (לאחר 60 שניות).",
   }
 } as const;
 
@@ -420,6 +422,7 @@ const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).repl
 const LIVE_START_TIMEOUT_MS = 12000;
 const LIVE_STATUS_TIMEOUT_MS = 8000;
 const FINAL_ANALYZE_TIMEOUT_MS = 35000;
+const HARD_RESULT_TIMEOUT_MS = 60000;
 const AUTO_INTEL_REFRESH_MAX_ATTEMPTS = 3;
 const AUTO_INTEL_REFRESH_DELAY_MS = 4500;
 const hasPendingExternalIntel = (data: AnalysisResponse | null): boolean =>
@@ -459,8 +462,11 @@ export function App() {
   const [lastScanPayload, setLastScanPayload] = useState<ScanPayload | null>(null);
   const [pendingIntelNotice, setPendingIntelNotice] = useState("");
   const [pendingIntelInProgress, setPendingIntelInProgress] = useState(false);
+  const [hardDisplayReady, setHardDisplayReady] = useState(false);
   const pollTokenRef = useRef(0);
   const autoIntelRunRef = useRef(0);
+  const autoIntelExhaustedTokenRef = useRef<number>(-1);
+  const forceDisplayTimerRef = useRef<number | null>(null);
   const t = translations[language];
 
   useEffect(() => {
@@ -472,13 +478,32 @@ export function App() {
   }, [liveMeta, countdownSec]);
 
   useEffect(() => {
+    return () => {
+      if (forceDisplayTimerRef.current != null) {
+        window.clearTimeout(forceDisplayTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // As soon as countdown reaches 00:00 (even before backend marks final),
+    // show pending-external-checks notice immediately.
+    if (!liveMeta || liveMeta.final || countdownSec > 0) return;
+    if (!pendingIntelNotice) {
+      setPendingIntelNotice(t.pendingIntelAutoStart);
+    }
+  }, [liveMeta, countdownSec, pendingIntelNotice, t]);
+
+  useEffect(() => {
     if (!result || loading) return;
     const resultIsFinal = !liveMeta || liveMeta.final;
     if (!resultIsFinal) return;
     if (!lastScanPayload) return;
+    if (autoIntelExhaustedTokenRef.current === pollTokenRef.current) return;
     if (!hasPendingExternalIntel(result)) {
       if (!pendingIntelInProgress) {
         setPendingIntelNotice("");
+        autoIntelExhaustedTokenRef.current = -1;
       }
       return;
     }
@@ -523,6 +548,8 @@ export function App() {
       if (!cancelled && runId === autoIntelRunRef.current) {
         setPendingIntelNotice(t.pendingIntelAutoStillPending);
         setPendingIntelInProgress(false);
+        // Avoid infinite refresh loops on stubborn pending-only responses.
+        autoIntelExhaustedTokenRef.current = pollTokenRef.current;
       }
     };
 
@@ -684,13 +711,21 @@ export function App() {
     const trimmedMessage = message.trim();
     pollTokenRef.current += 1;
     const runToken = pollTokenRef.current;
+    const clearForceDisplayTimer = () => {
+      if (forceDisplayTimerRef.current != null) {
+        window.clearTimeout(forceDisplayTimerRef.current);
+        forceDisplayTimerRef.current = null;
+      }
+    };
     autoIntelRunRef.current += 1;
+    autoIntelExhaustedTokenRef.current = -1;
     setError("");
     setResult(null);
     setLiveMeta(null);
     setCountdownSec(40);
     setPendingIntelInProgress(false);
     setPendingIntelNotice("");
+    setHardDisplayReady(false);
     setLastScanPayload({ url: trimmed, message: trimmedMessage, language });
 
     if (!termsAccepted) {
@@ -708,6 +743,33 @@ export function App() {
       return;
     }
 
+    clearForceDisplayTimer();
+    forceDisplayTimerRef.current = window.setTimeout(() => {
+      if (runToken !== pollTokenRef.current) return;
+      setHardDisplayReady(true);
+      setPendingIntelInProgress(false);
+      setPendingIntelNotice(t.forcedDisplayAfterTimeout);
+      setLiveMeta((prev) => {
+        if (!prev) return prev;
+        if (prev.final) return prev;
+        return {
+          ...prev,
+          final: true,
+          stage: 3,
+          progress: 100,
+          status_text: t.forcedDisplayAfterTimeout,
+        };
+      });
+      setResult((prev) => (
+        prev || {
+          score: 30,
+          risk_level: "Medium",
+          reasons: [t.forcedDisplayAfterTimeout],
+          reason_keys: ["insufficient_trust_signals"],
+        }
+      ));
+    }, HARD_RESULT_TIMEOUT_MS);
+
     setLoading(true);
     try {
       let startResponse: Response | null = null;
@@ -724,6 +786,7 @@ export function App() {
             LIVE_START_TIMEOUT_MS
           );
           if (startResponse.status === 429) {
+            clearForceDisplayTimer();
             setError(t.liveRateLimited);
             return;
           }
@@ -732,6 +795,7 @@ export function App() {
             continue;
           }
           if (startResponse.status >= 500 || startResponse.status === 408) {
+            clearForceDisplayTimer();
             setError(t.liveServerUnavailable);
             return;
           }
@@ -746,6 +810,7 @@ export function App() {
       }
 
       if (!startResponse) {
+        clearForceDisplayTimer();
         setError(startError instanceof Error ? t.liveNetworkSlow : t.liveServerUnavailable);
         return;
       }
@@ -809,6 +874,7 @@ export function App() {
             setResult((statusData.result || null) as AnalysisResponse | null);
             if (statusData.final) {
               gotFinal = true;
+              clearForceDisplayTimer();
               if (hasPendingExternalIntel((statusData.result || null) as AnalysisResponse | null)) {
                 // Show pending-intel panel immediately when countdown reaches 00:00.
                 setPendingIntelNotice(t.pendingIntelAutoStart);
@@ -836,6 +902,7 @@ export function App() {
               if (runToken !== pollTokenRef.current) return;
               if (finalResp.ok) {
                 const finalData = (await finalResp.json()) as AnalysisResponse;
+                clearForceDisplayTimer();
                 // Trust the authoritative /analyze body: inflating risk_level here without
                 // updating link_verdict/domain_verdict caused a misleading split UI.
                 setResult(finalData);
@@ -860,6 +927,7 @@ export function App() {
                 setCountdownSec(0);
               } else {
                 // Do not leave user without output: finalize UI with the latest partial snapshot.
+                clearForceDisplayTimer();
                 if (latestPartial) {
                   setResult(latestPartial);
                 }
@@ -886,6 +954,7 @@ export function App() {
               }
             } catch {
               if (runToken !== pollTokenRef.current) return;
+              clearForceDisplayTimer();
               if (latestPartial) {
                 setResult(latestPartial);
               }
@@ -928,6 +997,7 @@ export function App() {
       if (!response.ok) throw new Error(`Status ${response.status}`);
       const legacy = await response.json();
       if (runToken !== pollTokenRef.current) return;
+      clearForceDisplayTimer();
       setResult(legacy);
       setLiveMeta({
         analysis_id: "",
@@ -1001,10 +1071,15 @@ export function App() {
       result?.reason_keys?.some((k) => k === "brand_mismatch" || k === "lookalike_brand" || k === "brand")
   );
   // Show verdict/details only after live pipeline reports final (countdown covers the wait).
-  const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final);
+  const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final || hardDisplayReady);
   const hasPendingIntelOnFinal = Boolean(result && shouldShowResult && hasPendingExternalIntel(result));
-  const showPendingIntelPanel = Boolean(result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice));
-  const showFinalVerdict = Boolean(result && shouldShowResult && !hasPendingIntelOnFinal);
+  const pendingAtCountdownZeroBeforeFinal = Boolean(liveMeta && !liveMeta.final && countdownSec === 0);
+  const showPendingIntelPanel = Boolean(
+    !hardDisplayReady && (pendingAtCountdownZeroBeforeFinal || (result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice)))
+  );
+  // Hide verdict while auto-refresh is actively running; reveal provisional verdict if retries exhausted.
+  const blockVerdictWhileRefreshing = Boolean(!hardDisplayReady && hasPendingIntelOnFinal && pendingIntelInProgress);
+  const showFinalVerdict = Boolean(result && shouldShowResult && !blockVerdictWhileRefreshing);
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -1136,7 +1211,7 @@ export function App() {
         )}
 
         {/* Live progress + countdown only while analysis is still running */}
-        {liveMeta && !loading && !liveMeta.final && (
+        {liveMeta && !loading && !liveMeta.final && !hardDisplayReady && (
           <div className="result-section live-progress">
             <div className="result-section__title">{t.analysisSteps}</div>
             <div className="live-progress__status">
