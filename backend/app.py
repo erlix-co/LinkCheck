@@ -599,6 +599,8 @@ _SNAPSHOT_URL_CONTEXT_KEYS = (
     "case_confusable_lower_host",
     "mixed_scripts_char",
     "unicode_lookalike_char",
+    "domain_tld",
+    "tld_country_code",
     "lookalike_target",
     "lookalike_seen",
     "brand_target",
@@ -2348,6 +2350,11 @@ def _build_stage1_snapshot(submitted_url: str, language: str) -> tuple[str, list
     url_score, url_reasons, ctx = analyze_url(submitted_url)
     parsed = urlparse(submitted_url if "://" in submitted_url else f"https://{submitted_url}")
     hostname = (parsed.hostname or "").lower()
+    tld, tld_country_code = _country_from_tld(hostname)
+    if tld and not ctx.get("domain_tld"):
+        ctx["domain_tld"] = tld
+    if tld_country_code and not ctx.get("tld_country_code"):
+        ctx["tld_country_code"] = tld_country_code
     tls_ok = tls_certificate_valid(hostname) if hostname else False
     if hostname and not tls_ok and any(k in url_reasons for k in ("brand_mismatch", "suspicious_tld", "lookalike_brand")):
         url_score = max(url_score, 85)
