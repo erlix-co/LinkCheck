@@ -158,6 +158,9 @@ const translations = {
     analysisSteps: "Analysis steps",
     parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute.",
     countdownLabel: "Estimated time left",
+    liveRateLimited: "Too many checks were sent in a short time. Please wait a few seconds and try again.",
+    liveNetworkSlow: "The network is slow or unstable. Please try again.",
+    liveServerUnavailable: "The service is temporarily unavailable. Please try again shortly.",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -236,6 +239,9 @@ const translations = {
     analysisSteps: "שלבי בדיקה",
     parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת כחצי דקה.",
     countdownLabel: "זמן משוער לסיום",
+    liveRateLimited: "נשלחו יותר מדי בדיקות בזמן קצר. אנא המתן כמה שניות ונסה שוב.",
+    liveNetworkSlow: "החיבור איטי או לא יציב. אנא נסה שוב.",
+    liveServerUnavailable: "השירות אינו זמין כרגע. אנא נסה שוב בעוד זמן קצר.",
   }
 } as const;
 
@@ -396,6 +402,24 @@ const defaultApiBaseUrl =
     ? "/api"
     : "http://localhost:5000";
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).replace(/\/+$/, "");
+const LIVE_START_TIMEOUT_MS = 12000;
+const LIVE_STATUS_TIMEOUT_MS = 8000;
+const FINAL_ANALYZE_TIMEOUT_MS = 35000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 /* ═══════════════════════════════════════
    APP COMPONENT
@@ -598,11 +622,45 @@ export function App() {
 
     setLoading(true);
     try {
-      const startResponse = await fetch(`${apiBaseUrl}/analyze/live/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
-      });
+      let startResponse: Response | null = null;
+      let startError: unknown = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          startResponse = await fetchWithTimeout(
+            `${apiBaseUrl}/analyze/live/start`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+            },
+            LIVE_START_TIMEOUT_MS
+          );
+          if (startResponse.status === 429) {
+            setError(t.liveRateLimited);
+            return;
+          }
+          if ((startResponse.status >= 500 || startResponse.status === 408) && attempt === 0) {
+            await sleep(700);
+            continue;
+          }
+          if (startResponse.status >= 500 || startResponse.status === 408) {
+            setError(t.liveServerUnavailable);
+            return;
+          }
+          break;
+        } catch (err) {
+          startError = err;
+          if (attempt === 0) {
+            await sleep(700);
+            continue;
+          }
+        }
+      }
+
+      if (!startResponse) {
+        setError(startError instanceof Error ? t.liveNetworkSlow : t.liveServerUnavailable);
+        return;
+      }
       if (startResponse.ok) {
         const startData = await startResponse.json();
         if (runToken !== pollTokenRef.current) return;
@@ -621,11 +679,32 @@ export function App() {
         if (!startData.final && startData.analysis_id) {
           let gotFinal = false;
           const pollStartedAt = Date.now();
+          let transientStatusFailures = 0;
           for (let i = 0; i < 30; i += 1) {
             await new Promise((resolve) => setTimeout(resolve, 2300));
             if (runToken !== pollTokenRef.current) return;
-            const statusResp = await fetch(`${apiBaseUrl}/analyze/live/status/${startData.analysis_id}`);
-            if (!statusResp.ok) break;
+            let statusResp: Response;
+            try {
+              statusResp = await fetchWithTimeout(
+                `${apiBaseUrl}/analyze/live/status/${startData.analysis_id}`,
+                {},
+                LIVE_STATUS_TIMEOUT_MS
+              );
+            } catch {
+              transientStatusFailures += 1;
+              if (transientStatusFailures >= 2) break;
+              continue;
+            }
+            if (!statusResp.ok) {
+              if (statusResp.status === 429) {
+                setError(t.liveRateLimited);
+                break;
+              }
+              transientStatusFailures += 1;
+              if (transientStatusFailures >= 2) break;
+              continue;
+            }
+            transientStatusFailures = 0;
             const statusData = await statusResp.json();
             if (runToken !== pollTokenRef.current) return;
             setLiveMeta({
@@ -648,11 +727,15 @@ export function App() {
 
           // If live polling did not reach final state, force one final pass.
           if (!gotFinal) {
-            const finalResp = await fetch(`${apiBaseUrl}/analyze`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
-            });
+            const finalResp = await fetchWithTimeout(
+              `${apiBaseUrl}/analyze`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+              },
+              FINAL_ANALYZE_TIMEOUT_MS
+            );
             if (runToken !== pollTokenRef.current) return;
             if (finalResp.ok) {
               const finalData = (await finalResp.json()) as AnalysisResponse;
@@ -680,11 +763,15 @@ export function App() {
       }
 
       // Backward-compatible fallback to existing single-shot endpoint.
-      const response = await fetch(`${apiBaseUrl}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
-      });
+      const response = await fetchWithTimeout(
+        `${apiBaseUrl}/analyze`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+        },
+        FINAL_ANALYZE_TIMEOUT_MS
+      );
       if (!response.ok) throw new Error(`Status ${response.status}`);
       const legacy = await response.json();
       if (runToken !== pollTokenRef.current) return;
@@ -704,7 +791,12 @@ export function App() {
       });
       setCountdownSec(0);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      if (isAbort) {
+        setError(t.liveNetworkSlow);
+      } else {
+        setError(err instanceof Error ? err.message : t.liveServerUnavailable);
+      }
     } finally {
       setLoading(false);
     }
