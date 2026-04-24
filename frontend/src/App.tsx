@@ -166,6 +166,7 @@ const translations = {
     liveRateLimited: "Too many checks were sent in a short time. Please wait a few seconds and try again.",
     liveNetworkSlow: "The network is slow or unstable. Please try again.",
     liveServerUnavailable: "The service is temporarily unavailable. Please try again shortly.",
+    partialResultNotice: "External checks are still updating. Showing the latest available result for now.",
     pendingIntelAutoStart: "External threat checks are still updating. We are refreshing this result automatically now.",
     pendingIntelAutoProgress: "Automatic update in progress",
     pendingIntelAutoDone: "External checks were updated automatically.",
@@ -251,6 +252,7 @@ const translations = {
     liveRateLimited: "נשלחו יותר מדי בדיקות בזמן קצר. אנא המתן כמה שניות ונסה שוב.",
     liveNetworkSlow: "החיבור איטי או לא יציב. אנא נסה שוב.",
     liveServerUnavailable: "השירות אינו זמין כרגע. אנא נסה שוב בעוד זמן קצר.",
+    partialResultNotice: "הבדיקות החיצוניות עדיין מתעדכנות. מוצגת כרגע התוצאה העדכנית הזמינה.",
     pendingIntelAutoStart: "בדיקות האיומים החיצוניות עדיין מתעדכנות. אנחנו מרעננים את התוצאה אוטומטית כעת.",
     pendingIntelAutoProgress: "מרעננים אוטומטית",
     pendingIntelAutoDone: "הבדיקות החיצוניות עודכנו אוטומטית.",
@@ -509,7 +511,7 @@ export function App() {
           if (cancelled || runId !== autoIntelRunRef.current) return;
           setResult(refreshed);
           if (!hasPendingExternalIntel(refreshed)) {
-            setPendingIntelNotice(t.pendingIntelAutoDone);
+            setPendingIntelNotice("");
             setPendingIntelInProgress(false);
             return;
           }
@@ -764,6 +766,7 @@ export function App() {
 
         if (!startData.final && startData.analysis_id) {
           let gotFinal = false;
+          let latestPartial = (startData.result || null) as AnalysisResponse | null;
           const pollStartedAt = Date.now();
           let transientStatusFailures = 0;
           for (let i = 0; i < 30; i += 1) {
@@ -793,6 +796,7 @@ export function App() {
             transientStatusFailures = 0;
             const statusData = await statusResp.json();
             if (runToken !== pollTokenRef.current) return;
+            latestPartial = (statusData.result || latestPartial) as AnalysisResponse | null;
             setLiveMeta({
               analysis_id: statusData.analysis_id || "",
               final: Boolean(statusData.final),
@@ -805,6 +809,12 @@ export function App() {
             setResult((statusData.result || null) as AnalysisResponse | null);
             if (statusData.final) {
               gotFinal = true;
+              if (hasPendingExternalIntel((statusData.result || null) as AnalysisResponse | null)) {
+                // Show pending-intel panel immediately when countdown reaches 00:00.
+                setPendingIntelNotice(t.pendingIntelAutoStart);
+              } else {
+                setPendingIntelNotice("");
+              }
               setCountdownSec(0);
               break;
             }
@@ -813,34 +823,91 @@ export function App() {
 
           // If live polling did not reach final state, force one final pass.
           if (!gotFinal) {
-            const finalResp = await fetchWithTimeout(
-              `${apiBaseUrl}/analyze`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
-              },
-              FINAL_ANALYZE_TIMEOUT_MS
-            );
-            if (runToken !== pollTokenRef.current) return;
-            if (finalResp.ok) {
-              const finalData = (await finalResp.json()) as AnalysisResponse;
-              // Trust the authoritative /analyze body: inflating risk_level here without
-              // updating link_verdict/domain_verdict caused a misleading split UI.
-              setResult(finalData);
+            try {
+              const finalResp = await fetchWithTimeout(
+                `${apiBaseUrl}/analyze`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+                },
+                FINAL_ANALYZE_TIMEOUT_MS
+              );
+              if (runToken !== pollTokenRef.current) return;
+              if (finalResp.ok) {
+                const finalData = (await finalResp.json()) as AnalysisResponse;
+                // Trust the authoritative /analyze body: inflating risk_level here without
+                // updating link_verdict/domain_verdict caused a misleading split UI.
+                setResult(finalData);
+                setLiveMeta({
+                  analysis_id: startData.analysis_id || "",
+                  final: true,
+                  stage: 3,
+                  progress: 100,
+                  risk_level: (finalData.risk_level || "Low") as RiskLevel,
+                  status_text: t.analysisCompleted,
+                  steps: [
+                    { key: "stage_1", label: "URL analysis", status: "done" },
+                    { key: "stage_2", label: "Redirect check", status: "done" },
+                    { key: "stage_3", label: "External checks", status: "done" },
+                  ],
+                });
+                if (hasPendingExternalIntel(finalData)) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                } else {
+                  setPendingIntelNotice("");
+                }
+                setCountdownSec(0);
+              } else {
+                // Do not leave user without output: finalize UI with the latest partial snapshot.
+                if (latestPartial) {
+                  setResult(latestPartial);
+                }
+                setLiveMeta({
+                  analysis_id: startData.analysis_id || "",
+                  final: true,
+                  stage: 3,
+                  progress: 100,
+                  risk_level: ((latestPartial?.risk_level || startData.risk_level || "Low") as RiskLevel),
+                  status_text: t.partialResultNotice,
+                  steps: [
+                    { key: "stage_1", label: "URL analysis", status: "done" },
+                    { key: "stage_2", label: "Redirect check", status: "done" },
+                    { key: "stage_3", label: "External checks", status: "done" },
+                  ],
+                });
+                setError(t.partialResultNotice);
+                if (hasPendingExternalIntel(latestPartial)) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                } else {
+                  setPendingIntelNotice("");
+                }
+                setCountdownSec(0);
+              }
+            } catch {
+              if (runToken !== pollTokenRef.current) return;
+              if (latestPartial) {
+                setResult(latestPartial);
+              }
               setLiveMeta({
                 analysis_id: startData.analysis_id || "",
                 final: true,
                 stage: 3,
                 progress: 100,
-                risk_level: (finalData.risk_level || "Low") as RiskLevel,
-                status_text: t.analysisCompleted,
+                risk_level: ((latestPartial?.risk_level || startData.risk_level || "Low") as RiskLevel),
+                status_text: t.partialResultNotice,
                 steps: [
                   { key: "stage_1", label: "URL analysis", status: "done" },
                   { key: "stage_2", label: "Redirect check", status: "done" },
                   { key: "stage_3", label: "External checks", status: "done" },
                 ],
               });
+              setError(t.partialResultNotice);
+              if (hasPendingExternalIntel(latestPartial)) {
+                setPendingIntelNotice(t.pendingIntelAutoStart);
+              } else {
+                setPendingIntelNotice("");
+              }
               setCountdownSec(0);
             }
           }
@@ -875,6 +942,11 @@ export function App() {
           { key: "stage_3", label: "External checks", status: "done" },
         ],
       });
+      if (hasPendingExternalIntel(legacy as AnalysisResponse)) {
+        setPendingIntelNotice(t.pendingIntelAutoStart);
+      } else {
+        setPendingIntelNotice("");
+      }
       setCountdownSec(0);
     } catch (err) {
       const isAbort = err instanceof DOMException && err.name === "AbortError";
