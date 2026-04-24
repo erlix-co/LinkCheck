@@ -461,6 +461,7 @@ export function App() {
   const [pendingIntelInProgress, setPendingIntelInProgress] = useState(false);
   const pollTokenRef = useRef(0);
   const autoIntelRunRef = useRef(0);
+  const autoIntelExhaustedTokenRef = useRef<number>(-1);
   const t = translations[language];
 
   useEffect(() => {
@@ -472,13 +473,24 @@ export function App() {
   }, [liveMeta, countdownSec]);
 
   useEffect(() => {
+    // As soon as countdown reaches 00:00 (even before backend marks final),
+    // show pending-external-checks notice immediately.
+    if (!liveMeta || liveMeta.final || countdownSec > 0) return;
+    if (!pendingIntelNotice) {
+      setPendingIntelNotice(t.pendingIntelAutoStart);
+    }
+  }, [liveMeta, countdownSec, pendingIntelNotice, t]);
+
+  useEffect(() => {
     if (!result || loading) return;
     const resultIsFinal = !liveMeta || liveMeta.final;
     if (!resultIsFinal) return;
     if (!lastScanPayload) return;
+    if (autoIntelExhaustedTokenRef.current === pollTokenRef.current) return;
     if (!hasPendingExternalIntel(result)) {
       if (!pendingIntelInProgress) {
         setPendingIntelNotice("");
+        autoIntelExhaustedTokenRef.current = -1;
       }
       return;
     }
@@ -523,6 +535,8 @@ export function App() {
       if (!cancelled && runId === autoIntelRunRef.current) {
         setPendingIntelNotice(t.pendingIntelAutoStillPending);
         setPendingIntelInProgress(false);
+        // Avoid infinite refresh loops on stubborn pending-only responses.
+        autoIntelExhaustedTokenRef.current = pollTokenRef.current;
       }
     };
 
@@ -685,6 +699,7 @@ export function App() {
     pollTokenRef.current += 1;
     const runToken = pollTokenRef.current;
     autoIntelRunRef.current += 1;
+    autoIntelExhaustedTokenRef.current = -1;
     setError("");
     setResult(null);
     setLiveMeta(null);
@@ -1003,8 +1018,13 @@ export function App() {
   // Show verdict/details only after live pipeline reports final (countdown covers the wait).
   const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final);
   const hasPendingIntelOnFinal = Boolean(result && shouldShowResult && hasPendingExternalIntel(result));
-  const showPendingIntelPanel = Boolean(result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice));
-  const showFinalVerdict = Boolean(result && shouldShowResult && !hasPendingIntelOnFinal);
+  const pendingAtCountdownZeroBeforeFinal = Boolean(liveMeta && !liveMeta.final && countdownSec === 0);
+  const showPendingIntelPanel = Boolean(
+    pendingAtCountdownZeroBeforeFinal || (result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice))
+  );
+  // Hide verdict while auto-refresh is actively running; reveal provisional verdict if retries exhausted.
+  const blockVerdictWhileRefreshing = Boolean(hasPendingIntelOnFinal && pendingIntelInProgress);
+  const showFinalVerdict = Boolean(result && shouldShowResult && !blockVerdictWhileRefreshing);
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
