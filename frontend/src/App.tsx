@@ -511,7 +511,7 @@ export function App() {
           if (cancelled || runId !== autoIntelRunRef.current) return;
           setResult(refreshed);
           if (!hasPendingExternalIntel(refreshed)) {
-            setPendingIntelNotice(t.pendingIntelAutoDone);
+            setPendingIntelNotice("");
             setPendingIntelInProgress(false);
             return;
           }
@@ -809,6 +809,12 @@ export function App() {
             setResult((statusData.result || null) as AnalysisResponse | null);
             if (statusData.final) {
               gotFinal = true;
+              if (hasPendingExternalIntel((statusData.result || null) as AnalysisResponse | null)) {
+                // Show pending-intel panel immediately when countdown reaches 00:00.
+                setPendingIntelNotice(t.pendingIntelAutoStart);
+              } else {
+                setPendingIntelNotice("");
+              }
               setCountdownSec(0);
               break;
             }
@@ -846,6 +852,11 @@ export function App() {
                     { key: "stage_3", label: "External checks", status: "done" },
                   ],
                 });
+                if (hasPendingExternalIntel(finalData)) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                } else {
+                  setPendingIntelNotice("");
+                }
                 setCountdownSec(0);
               } else {
                 // Do not leave user without output: finalize UI with the latest partial snapshot.
@@ -866,6 +877,11 @@ export function App() {
                   ],
                 });
                 setError(t.partialResultNotice);
+                if (hasPendingExternalIntel(latestPartial)) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                } else {
+                  setPendingIntelNotice("");
+                }
                 setCountdownSec(0);
               }
             } catch {
@@ -887,6 +903,11 @@ export function App() {
                 ],
               });
               setError(t.partialResultNotice);
+              if (hasPendingExternalIntel(latestPartial)) {
+                setPendingIntelNotice(t.pendingIntelAutoStart);
+              } else {
+                setPendingIntelNotice("");
+              }
               setCountdownSec(0);
             }
           }
@@ -921,6 +942,11 @@ export function App() {
           { key: "stage_3", label: "External checks", status: "done" },
         ],
       });
+      if (hasPendingExternalIntel(legacy as AnalysisResponse)) {
+        setPendingIntelNotice(t.pendingIntelAutoStart);
+      } else {
+        setPendingIntelNotice("");
+      }
       setCountdownSec(0);
     } catch (err) {
       const isAbort = err instanceof DOMException && err.name === "AbortError";
