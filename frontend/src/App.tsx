@@ -201,7 +201,7 @@ const translations = {
     redirectPathToggle: "הצג מסלול הפניות",
     mainDomain: "דומיין ראשי",
     shownSubdomain: "תת-הדומיין שמוצג",
-    siteLocation: "האתר ממקום ב",
+    siteLocation: "האתר ממוקם ב",
     locationUnknown: "לא ידוע",
     reasons: "מה השפיע על התוצאה",
     greenChecks: "בדיקות אמון ובטיחות",
@@ -1002,6 +1002,9 @@ export function App() {
   );
   // Show verdict/details only after live pipeline reports final (countdown covers the wait).
   const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final);
+  const hasPendingIntelOnFinal = Boolean(result && shouldShowResult && hasPendingExternalIntel(result));
+  const showPendingIntelPanel = Boolean(result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice));
+  const showFinalVerdict = Boolean(result && shouldShowResult && !hasPendingIntelOnFinal);
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -1151,8 +1154,18 @@ export function App() {
           </div>
         )}
 
+        {/* Pending external checks notice (shown immediately at 00:00, before final verdict) */}
+        {showPendingIntelPanel && result && !loading && (
+          <div className="result-section">
+            <div className="reason-item reason-item--ai-summary">
+              <span className="reason-item__icon">{pendingIntelInProgress ? "⏳" : "ℹ️"}</span>
+              <span>{pendingIntelNotice || t.pendingIntelAutoStart}</span>
+            </div>
+          </div>
+        )}
+
         {/* Results */}
-        {result && shouldShowResult && !loading && (
+        {showFinalVerdict && result && !loading && (
           <div className="verdict">
             {/* Risk banner */}
             <div className={`verdict__banner verdict__banner--${v}`}>
@@ -1168,15 +1181,6 @@ export function App() {
                 </div>
               </div>
             </div>
-
-            {pendingIntelNotice ? (
-              <div className="result-section">
-                <div className="reason-item reason-item--ai-summary">
-                  <span className="reason-item__icon">{pendingIntelInProgress ? "⏳" : "ℹ️"}</span>
-                  <span>{pendingIntelNotice}</span>
-                </div>
-              </div>
-            ) : null}
 
             {(domainVerdict?.url || linkVerdict?.url) && (
               <div className="result-section">
