@@ -74,6 +74,11 @@ type LiveMeta = {
 };
 
 type Language = "en" | "he";
+type ScanPayload = {
+  url: string;
+  message: string;
+  language: Language;
+};
 
 /* ═══════════════════════════════════════
    I18N — UI STRINGS
@@ -161,6 +166,10 @@ const translations = {
     liveRateLimited: "Too many checks were sent in a short time. Please wait a few seconds and try again.",
     liveNetworkSlow: "The network is slow or unstable. Please try again.",
     liveServerUnavailable: "The service is temporarily unavailable. Please try again shortly.",
+    pendingIntelAutoStart: "External threat checks are still updating. We are refreshing this result automatically now.",
+    pendingIntelAutoProgress: "Automatic update in progress",
+    pendingIntelAutoDone: "External checks were updated automatically.",
+    pendingIntelAutoStillPending: "Some external checks are still updating. Keep this page open; the current result is still valid for now.",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -242,6 +251,10 @@ const translations = {
     liveRateLimited: "נשלחו יותר מדי בדיקות בזמן קצר. אנא המתן כמה שניות ונסה שוב.",
     liveNetworkSlow: "החיבור איטי או לא יציב. אנא נסה שוב.",
     liveServerUnavailable: "השירות אינו זמין כרגע. אנא נסה שוב בעוד זמן קצר.",
+    pendingIntelAutoStart: "בדיקות האיומים החיצוניות עדיין מתעדכנות. אנחנו מרעננים את התוצאה אוטומטית כעת.",
+    pendingIntelAutoProgress: "מרעננים אוטומטית",
+    pendingIntelAutoDone: "הבדיקות החיצוניות עודכנו אוטומטית.",
+    pendingIntelAutoStillPending: "חלק מהבדיקות החיצוניות עדיין בעדכון. אפשר להשאיר את הדף פתוח; התוצאה הנוכחית תקפה לעכשיו.",
   }
 } as const;
 
@@ -405,6 +418,10 @@ const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl).repl
 const LIVE_START_TIMEOUT_MS = 12000;
 const LIVE_STATUS_TIMEOUT_MS = 8000;
 const FINAL_ANALYZE_TIMEOUT_MS = 35000;
+const AUTO_INTEL_REFRESH_MAX_ATTEMPTS = 3;
+const AUTO_INTEL_REFRESH_DELAY_MS = 4500;
+const hasPendingExternalIntel = (data: AnalysisResponse | null): boolean =>
+  Boolean(data?.reason_keys?.some((k) => k === "vt_pending" || k === "urlscan_pending"));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchWithTimeout(
@@ -437,7 +454,11 @@ export function App() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [lastScanPayload, setLastScanPayload] = useState<ScanPayload | null>(null);
+  const [pendingIntelNotice, setPendingIntelNotice] = useState("");
+  const [pendingIntelInProgress, setPendingIntelInProgress] = useState(false);
   const pollTokenRef = useRef(0);
+  const autoIntelRunRef = useRef(0);
   const t = translations[language];
 
   useEffect(() => {
@@ -447,6 +468,67 @@ export function App() {
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [liveMeta, countdownSec]);
+
+  useEffect(() => {
+    if (!result || loading) return;
+    const resultIsFinal = !liveMeta || liveMeta.final;
+    if (!resultIsFinal) return;
+    if (!lastScanPayload) return;
+    if (!hasPendingExternalIntel(result)) {
+      if (!pendingIntelInProgress) {
+        setPendingIntelNotice("");
+      }
+      return;
+    }
+    if (pendingIntelInProgress) return;
+
+    let cancelled = false;
+    const runId = autoIntelRunRef.current + 1;
+    autoIntelRunRef.current = runId;
+    setPendingIntelInProgress(true);
+    setPendingIntelNotice(t.pendingIntelAutoStart);
+
+    const refreshPendingIntel = async () => {
+      for (let attempt = 1; attempt <= AUTO_INTEL_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+        await sleep(AUTO_INTEL_REFRESH_DELAY_MS);
+        if (cancelled || runId !== autoIntelRunRef.current) return;
+        setPendingIntelNotice(`${t.pendingIntelAutoProgress} ${attempt}/${AUTO_INTEL_REFRESH_MAX_ATTEMPTS}...`);
+
+        try {
+          const resp = await fetchWithTimeout(
+            `${apiBaseUrl}/analyze`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(lastScanPayload),
+            },
+            FINAL_ANALYZE_TIMEOUT_MS
+          );
+          if (!resp.ok) continue;
+          const refreshed = (await resp.json()) as AnalysisResponse;
+          if (cancelled || runId !== autoIntelRunRef.current) return;
+          setResult(refreshed);
+          if (!hasPendingExternalIntel(refreshed)) {
+            setPendingIntelNotice(t.pendingIntelAutoDone);
+            setPendingIntelInProgress(false);
+            return;
+          }
+        } catch {
+          // Keep trying until max attempts.
+        }
+      }
+
+      if (!cancelled && runId === autoIntelRunRef.current) {
+        setPendingIntelNotice(t.pendingIntelAutoStillPending);
+        setPendingIntelInProgress(false);
+      }
+    };
+
+    void refreshPendingIntel();
+    return () => {
+      cancelled = true;
+    };
+  }, [result, loading, liveMeta, lastScanPayload, pendingIntelInProgress, t]);
 
   const riskVariant = (level: RiskLevel) =>
     level === "Low" ? "safe" : level === "Medium" ? "warn" : "danger";
@@ -600,10 +682,14 @@ export function App() {
     const trimmedMessage = message.trim();
     pollTokenRef.current += 1;
     const runToken = pollTokenRef.current;
+    autoIntelRunRef.current += 1;
     setError("");
     setResult(null);
     setLiveMeta(null);
     setCountdownSec(40);
+    setPendingIntelInProgress(false);
+    setPendingIntelNotice("");
+    setLastScanPayload({ url: trimmed, message: trimmedMessage, language });
 
     if (!termsAccepted) {
       setError(t.termsRequired);
@@ -1010,6 +1096,15 @@ export function App() {
                 </div>
               </div>
             </div>
+
+            {pendingIntelNotice ? (
+              <div className="result-section">
+                <div className="reason-item reason-item--ai-summary">
+                  <span className="reason-item__icon">{pendingIntelInProgress ? "⏳" : "ℹ️"}</span>
+                  <span>{pendingIntelNotice}</span>
+                </div>
+              </div>
+            ) : null}
 
             {(domainVerdict?.url || linkVerdict?.url) && (
               <div className="result-section">
