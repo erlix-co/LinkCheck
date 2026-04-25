@@ -40,6 +40,18 @@ type AnalysisResponse = {
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
+  message_link_count?: number;
+  message_links_analyzed_count?: number;
+  selected_message_url?: string;
+  selected_message_url_index?: number;
+  message_links?: Array<{
+    index?: number;
+    submitted_url?: string;
+    analyzed_url?: string;
+    risk_level?: RiskLevel;
+    score?: number;
+    reason_keys?: string[];
+  }>;
   domain_verdict?: {
     url?: string;
     risk_level?: RiskLevel;
@@ -125,6 +137,9 @@ const translations = {
     linkVerdictWarn: "This specific link needs caution.",
     fullLinksToggle: "Show full links",
     fullLinksTitle: "Full links",
+    messageLinksSummary: "Links found in message",
+    messageLinksAnalyzed: "Links analyzed",
+    selectedMessageLink: "Highest-risk link selected",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -213,6 +228,9 @@ const translations = {
     linkVerdictWarn: "הקישור הספציפי דורש זהירות.",
     fullLinksToggle: "הצג קישורים מלאים",
     fullLinksTitle: "קישורים מלאים",
+    messageLinksSummary: "קישורים שנמצאו בהודעה",
+    messageLinksAnalyzed: "קישורים שנבדקו",
+    selectedMessageLink: "הקישור בעל הסיכון הגבוה ביותר שנבחר",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -285,6 +303,7 @@ const reasonI18n = {
     message_pressure: "The message tries to create pressure or urgency.",
     message_short_link: "A very short message with a link can be suspicious.",
     message_aggressive: "The message uses aggressive punctuation to push quick action.",
+    multiple_links_detected: "The message contains multiple links. We analyzed them and selected the highest-risk link for the main result.",
     ai_social_engineering: "The message looks like it is trying to pressure the reader into acting quickly.",
     ai_authority_impersonation: "The message may be pretending to come from an official company or service.",
     ai_sensitive_request: "The message asks for a sensitive action like login, payment, or verification.",
@@ -345,6 +364,7 @@ const reasonI18n = {
     message_pressure: "בהודעה יש לחץ או דחיפות.",
     message_short_link: "הודעה קצרה מאוד עם קישור יכולה להיות חשודה.",
     message_aggressive: "בהודעה יש סימני פיסוק אגרסיביים שמנסים לדחוף לפעולה מהירה.",
+    multiple_links_detected: "בהודעה נמצאו כמה קישורים. ניתחנו אותם ובחרנו את הקישור בעל הסיכון הגבוה ביותר לתוצאה הראשית.",
     ai_social_engineering: "נראה שההודעה מנסה להלחיץ את הקורא כדי שיפעל מהר.",
     ai_authority_impersonation: "נראה שההודעה מנסה להיראות כאילו נשלחה מגוף רשמי או מוכר.",
     ai_sensitive_request: "ההודעה מבקשת פעולה רגישה כמו התחברות, תשלום או אימות.",
@@ -1321,6 +1341,26 @@ export function App() {
                     <span className="url-row__label">{t.analyzedUrl}</span>
                     <span className="url-row__value">{result.analyzed_url}</span>
                   </div>
+                )}
+                {result.message_link_count && result.message_link_count > 1 && (
+                  <>
+                    <div className="url-row">
+                      <span className="url-row__label">{t.messageLinksSummary}</span>
+                      <span className="url-row__value">{result.message_link_count}</span>
+                    </div>
+                    <div className="url-row">
+                      <span className="url-row__label">{t.messageLinksAnalyzed}</span>
+                      <span className="url-row__value">
+                        {result.message_links_analyzed_count ?? result.message_link_count}
+                      </span>
+                    </div>
+                    {result.selected_message_url && (
+                      <div className="url-row">
+                        <span className="url-row__label">{t.selectedMessageLink}</span>
+                        <span className="url-row__value">{result.selected_message_url}</span>
+                      </div>
+                    )}
+                  </>
                 )}
                 {hasSubdomainFocus && (
                   <div

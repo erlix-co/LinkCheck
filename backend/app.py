@@ -188,6 +188,7 @@ def _gemini_generate_text(
 # Input size caps for /analyze (DoS / abuse mitigation).
 MAX_ANALYZE_URL_LEN = int(os.getenv("MAX_ANALYZE_URL_LEN", "4096"))
 MAX_ANALYZE_MESSAGE_LEN = int(os.getenv("MAX_ANALYZE_MESSAGE_LEN", "100000"))
+MAX_MESSAGE_URLS_TO_ANALYZE = max(1, int(os.getenv("MAX_MESSAGE_URLS_TO_ANALYZE", "5")))
 
 # Use bundled PSL snapshot for stable, offline-safe registrable extraction.
 psl_extract = tldextract.TLDExtract(suffix_list_urls=None)
@@ -456,6 +457,7 @@ I18N = {
         "message_pressure": "The message uses pressure or urgency language.",
         "message_short_link": "Short message with a link can be suspicious.",
         "message_aggressive": "Aggressive punctuation detected.",
+        "multiple_links_detected": "The message contains multiple links; the highest-risk link was analyzed in detail.",
         "ai_social_engineering": "Message intent looks like social engineering (pressure + action request).",
         "ai_authority_impersonation": "Message appears to impersonate an official organization/brand.",
         "ai_sensitive_request": "Message asks for sensitive action (login/payment/verification).",
@@ -529,6 +531,7 @@ I18N = {
         "message_pressure": "יש בהודעה ניסוח מלחיץ או דחוף.",
         "message_short_link": "הודעה קצרה עם קישור יכולה להיות חשודה.",
         "message_aggressive": "נמצאו סימני פיסוק אגרסיביים.",
+        "multiple_links_detected": "בהודעה נמצאו כמה קישורים; הקישור בעל הסיכון הגבוה ביותר נבדק בפירוט.",
         "ai_social_engineering": "נראית כוונת הנדסה חברתית בהודעה (לחץ + בקשה לפעולה).",
         "ai_authority_impersonation": "נראה שההודעה מתחזה לגורם רשמי/מותג מוכר.",
         "ai_sensitive_request": "ההודעה מבקשת פעולה רגישה (כניסה/תשלום/אימות).",
@@ -973,26 +976,55 @@ def _extract_bare_domain_url(text: str) -> str:
     return ""
 
 
-def extract_first_url(text: str) -> str:
-    """Extract first URL from text if present."""
+def extract_urls(text: str) -> list[str]:
+    """Extract unique URLs from message text, preserving first-seen order."""
     if not text:
-        return ""
-    match = URL_REGEX.search(text)
-    if match:
-        candidate = match.group(0).strip(".,);]")
-        if candidate.startswith("www."):
-            return f"https://{candidate}"
-        return candidate
-    # Catch known shortener domains without protocol prefix (e.g. "bit.ly/abc")
+        return []
+    candidates: list[tuple[int, str]] = []
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def collect(start: int, candidate: str) -> None:
+        candidates.append((start, candidate))
+
+    def add(candidate: str) -> None:
+        value = (candidate or "").strip(".,);]")
+        if not value:
+            return
+        if value.startswith("www."):
+            value = f"https://{value}"
+        normalized = normalize_url_for_checks(value)
+        if not normalized:
+            return
+        key = normalized.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        urls.append(normalized)
+
+    for match in URL_REGEX.finditer(text):
+        collect(match.start(), match.group(0))
+
     for domain in SHORTENER_DOMAINS:
         pattern = re.compile(rf"\b{re.escape(domain)}/\S+", re.IGNORECASE)
-        m = pattern.search(text)
-        if m:
-            return f"https://{m.group(0).strip('.,);]')}"
-    bare = _extract_bare_domain_url(text)
-    if bare:
-        return f"https://{bare}"
-    return ""
+        for match in pattern.finditer(text):
+            collect(match.start(), match.group(0))
+
+    for match in BARE_URL_IN_TEXT.finditer(text):
+        cand = match.group(0)
+        if _bare_url_candidate_ok(cand):
+            collect(match.start(), cand)
+
+    for _, candidate in sorted(candidates, key=lambda item: item[0]):
+        add(candidate)
+
+    return urls
+
+
+def extract_first_url(text: str) -> str:
+    """Extract first URL from text if present."""
+    urls = extract_urls(text)
+    return urls[0] if urls else ""
 
 
 def normalize_url_for_checks(url: str) -> str:
@@ -2467,7 +2499,9 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["result"] = partial
 
     # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
-    full_payload = {"url": submitted_url, "message": message, "language": language}
+    # Keep raw_url here: when the user pasted a message with multiple links, /analyze
+    # must see the original empty URL field and choose the highest-risk link.
+    full_payload = {"url": raw_url, "message": message, "language": language}
     final_result = _run_full_analysis_internal(full_payload)
     transient_intel_keys = {"vt_pending", "urlscan_pending", "gsb_unavailable"}
 
@@ -2546,6 +2580,58 @@ def analyze():
         )
 
     # If user provided full message, extract URL automatically.
+    message_urls = extract_urls(message)
+    if not raw_url and len(message_urls) > 1 and not payload.get("_single_url_only"):
+        analyzed_links: list[dict] = []
+        for idx, link in enumerate(message_urls[:MAX_MESSAGE_URLS_TO_ANALYZE]):
+            with app.test_client() as client:
+                resp = client.post(
+                    "/analyze",
+                    json={
+                        "url": link,
+                        "message": message,
+                        "language": language,
+                        "_single_url_only": True,
+                    },
+                )
+            if not resp.is_json:
+                continue
+            body = resp.get_json(silent=True) or {}
+            if not isinstance(body, dict) or resp.status_code >= 400:
+                continue
+            analyzed_links.append(
+                {
+                    "index": idx,
+                    "submitted_url": link,
+                    "analyzed_url": body.get("analyzed_url", link),
+                    "risk_level": body.get("risk_level", "Low"),
+                    "score": int(body.get("score", 0) or 0),
+                    "reason_keys": body.get("reason_keys", []),
+                    "result": body,
+                }
+            )
+
+        if analyzed_links:
+            selected = max(
+                analyzed_links,
+                key=lambda item: (_severity_rank(str(item.get("risk_level", "Low"))), int(item.get("score", 0) or 0)),
+            )
+            result = dict(selected["result"])
+            reason_keys = list(result.get("reason_keys", []) or [])
+            if "multiple_links_detected" not in reason_keys:
+                reason_keys.insert(0, "multiple_links_detected")
+            result["reason_keys"] = reason_keys
+            result["reasons"] = [_localized_reason_line(language, key, result) for key in reason_keys]
+            result["message_link_count"] = len(message_urls)
+            result["message_links_analyzed_count"] = len(analyzed_links)
+            result["message_links"] = [
+                {k: v for k, v in item.items() if k != "result"}
+                for item in analyzed_links
+            ]
+            result["selected_message_url"] = selected.get("submitted_url", "")
+            result["selected_message_url_index"] = selected.get("index", 0)
+            return jsonify(result)
+
     extracted_url = extract_first_url(message)
     submitted_url = raw_url or extracted_url
     normalized_submitted = normalize_url_for_checks(submitted_url)
