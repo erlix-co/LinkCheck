@@ -176,7 +176,7 @@ const translations = {
     waitingExternal: "Waiting for external analysis...",
     analysisCompleted: "Analysis completed.",
     analysisSteps: "Analysis steps",
-    parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute.",
+    parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute to a minute.",
     countdownLabel: "Estimated time left",
     liveRateLimited: "Too many checks were sent in a short time. Please wait a few seconds and try again.",
     liveNetworkSlow: "The network is slow or unstable. Please try again.",
@@ -267,7 +267,7 @@ const translations = {
     waitingExternal: "ממתינים לניתוח חיצוני...",
     analysisCompleted: "הבדיקה הושלמה.",
     analysisSteps: "שלבי בדיקה",
-    parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת כחצי דקה.",
+    parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת לרוב כחצי דקה עד דקה.",
     countdownLabel: "זמן משוער לסיום",
     liveRateLimited: "נשלחו יותר מדי בדיקות בזמן קצר. אנא המתן כמה שניות ונסה שוב.",
     liveNetworkSlow: "החיבור איטי או לא יציב. אנא נסה שוב.",
@@ -445,6 +445,7 @@ const LIVE_START_TIMEOUT_MS = 12000;
 const LIVE_STATUS_TIMEOUT_MS = 8000;
 const FINAL_ANALYZE_TIMEOUT_MS = 35000;
 const HARD_RESULT_TIMEOUT_MS = 60000;
+const LIVE_COUNTDOWN_SECONDS = 60;
 const AUTO_INTEL_REFRESH_MAX_ATTEMPTS = 3;
 const AUTO_INTEL_REFRESH_DELAY_MS = 4500;
 const hasPendingExternalIntel = (data: AnalysisResponse | null): boolean =>
@@ -482,7 +483,7 @@ export function App() {
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [liveMeta, setLiveMeta] = useState<LiveMeta | null>(null);
-  const [countdownSec, setCountdownSec] = useState(40);
+  const [countdownSec, setCountdownSec] = useState(LIVE_COUNTDOWN_SECONDS);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -499,12 +500,15 @@ export function App() {
   const t = translations[language];
 
   useEffect(() => {
-    if (!liveMeta || liveMeta.final || countdownSec <= 0) return;
+    if (!liveMeta || countdownSec <= 0) return;
+    const shouldContinueCountdown =
+      !liveMeta.final || (liveMeta.final && hasPendingExternalIntel(result) && !hardDisplayReady);
+    if (!shouldContinueCountdown) return;
     const timer = window.setTimeout(() => {
       setCountdownSec((prev) => Math.max(0, prev - 1));
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [liveMeta, countdownSec]);
+  }, [liveMeta, countdownSec, result, hardDisplayReady]);
 
   useEffect(() => {
     return () => {
@@ -751,7 +755,7 @@ export function App() {
     setError("");
     setResult(null);
     setLiveMeta(null);
-    setCountdownSec(40);
+    setCountdownSec(LIVE_COUNTDOWN_SECONDS);
     setPendingIntelInProgress(false);
     setPendingIntelNotice("");
     setHardDisplayReady(false);
@@ -925,11 +929,13 @@ export function App() {
                   ]) as LiveStep[],
                 });
                 if (hasPendingExternalIntel(finalResult)) {
-                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                  if (countdownSec <= 0) {
+                    setPendingIntelNotice(t.pendingIntelAutoStart);
+                  }
                 } else {
                   setPendingIntelNotice("");
+                  setCountdownSec(0);
                 }
-                setCountdownSec(0);
                 return true;
               } catch {
                 // Keep the provisional result visible while the backend finishes.
@@ -986,11 +992,13 @@ export function App() {
               clearForceDisplayTimer();
               if (hasPendingExternalIntel(statusResult)) {
                 // Show pending-intel panel immediately when countdown reaches 00:00.
-                setPendingIntelNotice(t.pendingIntelAutoStart);
+                if (countdownSec <= 0) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                }
               } else {
                 setPendingIntelNotice("");
+                setCountdownSec(0);
               }
-              setCountdownSec(0);
               break;
             }
             if (Date.now() - pollStartedAt > 65000) break;
@@ -1029,11 +1037,13 @@ export function App() {
                   ],
                 });
                 if (hasPendingExternalIntel(finalData)) {
-                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                  if (countdownSec <= 0) {
+                    setPendingIntelNotice(t.pendingIntelAutoStart);
+                  }
                 } else {
                   setPendingIntelNotice("");
+                  setCountdownSec(0);
                 }
-                setCountdownSec(0);
               } else {
                 // Do not leave user without output: finalize UI with the latest partial snapshot.
                 clearForceDisplayTimer();
@@ -1055,11 +1065,13 @@ export function App() {
                 });
                 setError(t.partialResultNotice);
                 if (hasPendingExternalIntel(latestPartial)) {
-                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                  if (countdownSec <= 0) {
+                    setPendingIntelNotice(t.pendingIntelAutoStart);
+                  }
                 } else {
                   setPendingIntelNotice("");
+                  setCountdownSec(0);
                 }
-                setCountdownSec(0);
                 void applyFinalLiveStatusWhenReady();
               }
             } catch {
@@ -1083,11 +1095,13 @@ export function App() {
               });
               setError(t.partialResultNotice);
               if (hasPendingExternalIntel(latestPartial)) {
-                setPendingIntelNotice(t.pendingIntelAutoStart);
+                if (countdownSec <= 0) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                }
               } else {
                 setPendingIntelNotice("");
+                setCountdownSec(0);
               }
-              setCountdownSec(0);
               void applyFinalLiveStatusWhenReady();
             }
           }
@@ -1124,11 +1138,13 @@ export function App() {
         ],
       });
       if (hasPendingExternalIntel(legacy as AnalysisResponse)) {
-        setPendingIntelNotice(t.pendingIntelAutoStart);
+        if (countdownSec <= 0) {
+          setPendingIntelNotice(t.pendingIntelAutoStart);
+        }
       } else {
         setPendingIntelNotice("");
+        setCountdownSec(0);
       }
-      setCountdownSec(0);
     } catch (err) {
       const isAbort = err instanceof DOMException && err.name === "AbortError";
       if (isAbort) {
@@ -1185,11 +1201,14 @@ export function App() {
   const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final || hardDisplayReady);
   const hasPendingIntelOnFinal = Boolean(result && shouldShowResult && hasPendingExternalIntel(result));
   const pendingAtCountdownZeroBeforeFinal = Boolean(liveMeta && !liveMeta.final && countdownSec === 0);
+  const pendingNoticeGateOpen = Boolean(hardDisplayReady || countdownSec === 0);
   const showPendingIntelPanel = Boolean(
-    !hardDisplayReady && (pendingAtCountdownZeroBeforeFinal || (result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice)))
+    pendingNoticeGateOpen
+      && !hardDisplayReady
+      && (pendingAtCountdownZeroBeforeFinal || (result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice)))
   );
-  // Hide verdict while auto-refresh is actively running; reveal provisional verdict if retries exhausted.
-  const blockVerdictWhileRefreshing = Boolean(!hardDisplayReady && hasPendingIntelOnFinal && pendingIntelInProgress);
+  // Keep verdict visible while background auto-refresh runs.
+  const blockVerdictWhileRefreshing = false;
   const showFinalVerdict = Boolean(result && shouldShowResult && !blockVerdictWhileRefreshing);
   const showProvisionalResultNotice = Boolean(
     result
@@ -1336,7 +1355,7 @@ export function App() {
             <div className="live-countdown" dir="ltr">
               <span className="live-countdown__label">{t.countdownLabel}</span>
               <span className="live-countdown__value">
-                00:{String(liveMeta.final ? 0 : countdownSec).padStart(2, "0")}
+                00:{String(countdownSec).padStart(2, "0")}
               </span>
             </div>
             <div className="live-progress__status">
