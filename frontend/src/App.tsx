@@ -40,6 +40,18 @@ type AnalysisResponse = {
   domain_tld?: string;
   tld_country_code?: string;
   page_audience?: string;
+  message_link_count?: number;
+  message_links_analyzed_count?: number;
+  selected_message_url?: string;
+  selected_message_url_index?: number;
+  message_links?: Array<{
+    index?: number;
+    submitted_url?: string;
+    analyzed_url?: string;
+    risk_level?: RiskLevel;
+    score?: number;
+    reason_keys?: string[];
+  }>;
   domain_verdict?: {
     url?: string;
     risk_level?: RiskLevel;
@@ -125,6 +137,9 @@ const translations = {
     linkVerdictWarn: "This specific link needs caution.",
     fullLinksToggle: "Show full links",
     fullLinksTitle: "Full links",
+    messageLinksSummary: "Links found in message",
+    messageLinksAnalyzed: "Links analyzed",
+    selectedMessageLink: "Highest-risk link selected",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -172,6 +187,7 @@ const translations = {
     pendingIntelAutoDone: "External checks were updated automatically.",
     pendingIntelAutoStillPending: "Some external checks are still updating. Keep this page open; the current result is still valid for now.",
     forcedDisplayAfterTimeout: "External checks are still updating. Showing the latest available result now (after 60 seconds).",
+    provisionalResultNotice: "This is a temporary result. The final result will update automatically in the next few seconds.",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -213,6 +229,9 @@ const translations = {
     linkVerdictWarn: "הקישור הספציפי דורש זהירות.",
     fullLinksToggle: "הצג קישורים מלאים",
     fullLinksTitle: "קישורים מלאים",
+    messageLinksSummary: "קישורים שנמצאו בהודעה",
+    messageLinksAnalyzed: "קישורים שנבדקו",
+    selectedMessageLink: "הקישור בעל הסיכון הגבוה ביותר שנבחר",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -259,6 +278,7 @@ const translations = {
     pendingIntelAutoDone: "הבדיקות החיצוניות עודכנו אוטומטית.",
     pendingIntelAutoStillPending: "חלק מהבדיקות החיצוניות עדיין בעדכון. אפשר להשאיר את הדף פתוח; התוצאה הנוכחית תקפה לעכשיו.",
     forcedDisplayAfterTimeout: "הבדיקות החיצוניות עדיין מתעדכנות. מוצגת עכשיו התוצאה העדכנית הזמינה (לאחר 60 שניות).",
+    provisionalResultNotice: "זו תוצאה זמנית. התוצאה הסופית תתעדכן אוטומטית בשניות הקרובות.",
   }
 } as const;
 
@@ -285,6 +305,7 @@ const reasonI18n = {
     message_pressure: "The message tries to create pressure or urgency.",
     message_short_link: "A very short message with a link can be suspicious.",
     message_aggressive: "The message uses aggressive punctuation to push quick action.",
+    multiple_links_detected: "The message contains multiple links. We analyzed them and selected the highest-risk link for the main result.",
     ai_social_engineering: "The message looks like it is trying to pressure the reader into acting quickly.",
     ai_authority_impersonation: "The message may be pretending to come from an official company or service.",
     ai_sensitive_request: "The message asks for a sensitive action like login, payment, or verification.",
@@ -345,6 +366,7 @@ const reasonI18n = {
     message_pressure: "בהודעה יש לחץ או דחיפות.",
     message_short_link: "הודעה קצרה מאוד עם קישור יכולה להיות חשודה.",
     message_aggressive: "בהודעה יש סימני פיסוק אגרסיביים שמנסים לדחוף לפעולה מהירה.",
+    multiple_links_detected: "בהודעה נמצאו כמה קישורים. ניתחנו אותם ובחרנו את הקישור בעל הסיכון הגבוה ביותר לתוצאה הראשית.",
     ai_social_engineering: "נראה שההודעה מנסה להלחיץ את הקורא כדי שיפעל מהר.",
     ai_authority_impersonation: "נראה שההודעה מנסה להיראות כאילו נשלחה מגוף רשמי או מוכר.",
     ai_sensitive_request: "ההודעה מבקשת פעולה רגישה כמו התחברות, תשלום או אימות.",
@@ -427,6 +449,13 @@ const AUTO_INTEL_REFRESH_MAX_ATTEMPTS = 3;
 const AUTO_INTEL_REFRESH_DELAY_MS = 4500;
 const hasPendingExternalIntel = (data: AnalysisResponse | null): boolean =>
   Boolean(data?.reason_keys?.some((k) => k === "vt_pending" || k === "urlscan_pending"));
+const isCompleteAnalysisResult = (data: AnalysisResponse | null): boolean =>
+  Boolean(
+    data
+      && Array.isArray(data.green_checks)
+      && data.green_checks.length > 0
+      && data.link_verdict
+  );
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchWithTimeout(
@@ -743,6 +772,20 @@ export function App() {
       return;
     }
 
+    const fetchAuthoritativeFinal = async (): Promise<AnalysisResponse | null> => {
+      const finalResp = await fetchWithTimeout(
+        `${apiBaseUrl}/analyze`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+        },
+        FINAL_ANALYZE_TIMEOUT_MS
+      );
+      if (runToken !== pollTokenRef.current || !finalResp.ok) return null;
+      return (await finalResp.json()) as AnalysisResponse;
+    };
+
     clearForceDisplayTimer();
     forceDisplayTimerRef.current = window.setTimeout(() => {
       if (runToken !== pollTokenRef.current) return;
@@ -817,16 +860,21 @@ export function App() {
       if (startResponse.ok) {
         const startData = await startResponse.json();
         if (runToken !== pollTokenRef.current) return;
+        let startResult = (startData.result || null) as AnalysisResponse | null;
+        if (startData.final && !isCompleteAnalysisResult(startResult)) {
+          startResult = (await fetchAuthoritativeFinal()) || startResult;
+          if (runToken !== pollTokenRef.current) return;
+        }
         setLiveMeta({
           analysis_id: startData.analysis_id || "",
           final: Boolean(startData.final),
           stage: Number(startData.stage || 1),
           progress: Number(startData.progress || 0),
-          risk_level: (startData.risk_level || "Low") as RiskLevel,
+          risk_level: (startResult?.risk_level || startData.risk_level || "Low") as RiskLevel,
           status_text: startData.status_text || t.liveStatus,
           steps: (startData.steps || []) as LiveStep[],
         });
-        setResult((startData.result || null) as AnalysisResponse | null);
+        setResult(startResult);
         setLoading(false);
 
         if (!startData.final && startData.analysis_id) {
@@ -834,6 +882,61 @@ export function App() {
           let latestPartial = (startData.result || null) as AnalysisResponse | null;
           const pollStartedAt = Date.now();
           let transientStatusFailures = 0;
+          const applyFinalLiveStatusWhenReady = async () => {
+            for (let attempt = 0; attempt < 24; attempt += 1) {
+              await sleep(2500);
+              if (runToken !== pollTokenRef.current) return false;
+              try {
+                const statusResp = await fetchWithTimeout(
+                  `${apiBaseUrl}/analyze/live/status/${startData.analysis_id}`,
+                  {},
+                  LIVE_STATUS_TIMEOUT_MS
+                );
+                if (!statusResp.ok) continue;
+                const statusData = await statusResp.json();
+                if (runToken !== pollTokenRef.current) return false;
+                if (statusData.result) {
+                  latestPartial = statusData.result as AnalysisResponse;
+                }
+                if (!statusData.final) continue;
+
+                let finalResult = (statusData.result || latestPartial) as AnalysisResponse | null;
+                if (!isCompleteAnalysisResult(finalResult)) {
+                  finalResult = (await fetchAuthoritativeFinal()) || finalResult;
+                  if (runToken !== pollTokenRef.current) return false;
+                }
+                if (!isCompleteAnalysisResult(finalResult)) continue;
+                if (finalResult) {
+                  setResult(finalResult);
+                }
+                clearForceDisplayTimer();
+                setHardDisplayReady(false);
+                setLiveMeta({
+                  analysis_id: statusData.analysis_id || startData.analysis_id || "",
+                  final: true,
+                  stage: Number(statusData.stage || 3),
+                  progress: Number(statusData.progress || 100),
+                  risk_level: (statusData.risk_level || finalResult?.risk_level || "Low") as RiskLevel,
+                  status_text: statusData.status_text || t.analysisCompleted,
+                  steps: (statusData.steps || [
+                    { key: "stage_1", label: "URL analysis", status: "done" },
+                    { key: "stage_2", label: "Redirect check", status: "done" },
+                    { key: "stage_3", label: "External checks", status: "done" },
+                  ]) as LiveStep[],
+                });
+                if (hasPendingExternalIntel(finalResult)) {
+                  setPendingIntelNotice(t.pendingIntelAutoStart);
+                } else {
+                  setPendingIntelNotice("");
+                }
+                setCountdownSec(0);
+                return true;
+              } catch {
+                // Keep the provisional result visible while the backend finishes.
+              }
+            }
+            return false;
+          };
           for (let i = 0; i < 30; i += 1) {
             await new Promise((resolve) => setTimeout(resolve, 2300));
             if (runToken !== pollTokenRef.current) return;
@@ -861,21 +964,27 @@ export function App() {
             transientStatusFailures = 0;
             const statusData = await statusResp.json();
             if (runToken !== pollTokenRef.current) return;
-            latestPartial = (statusData.result || latestPartial) as AnalysisResponse | null;
+            let statusResult = (statusData.result || latestPartial) as AnalysisResponse | null;
+            if (statusData.final && !isCompleteAnalysisResult(statusResult)) {
+              statusResult = (await fetchAuthoritativeFinal()) || statusResult;
+              if (runToken !== pollTokenRef.current) return;
+            }
+            const statusIsFinal = Boolean(statusData.final && isCompleteAnalysisResult(statusResult));
+            latestPartial = statusResult;
             setLiveMeta({
               analysis_id: statusData.analysis_id || "",
-              final: Boolean(statusData.final),
+              final: statusIsFinal,
               stage: Number(statusData.stage || 1),
               progress: Number(statusData.progress || 0),
-              risk_level: (statusData.risk_level || "Low") as RiskLevel,
-              status_text: statusData.status_text || (statusData.final ? t.analysisCompleted : t.waitingExternal),
+              risk_level: (statusResult?.risk_level || statusData.risk_level || "Low") as RiskLevel,
+              status_text: statusData.status_text || (statusIsFinal ? t.analysisCompleted : t.waitingExternal),
               steps: (statusData.steps || []) as LiveStep[],
             });
-            setResult((statusData.result || null) as AnalysisResponse | null);
-            if (statusData.final) {
+            setResult(statusResult);
+            if (statusIsFinal) {
               gotFinal = true;
               clearForceDisplayTimer();
-              if (hasPendingExternalIntel((statusData.result || null) as AnalysisResponse | null)) {
+              if (hasPendingExternalIntel(statusResult)) {
                 // Show pending-intel panel immediately when countdown reaches 00:00.
                 setPendingIntelNotice(t.pendingIntelAutoStart);
               } else {
@@ -951,6 +1060,7 @@ export function App() {
                   setPendingIntelNotice("");
                 }
                 setCountdownSec(0);
+                void applyFinalLiveStatusWhenReady();
               }
             } catch {
               if (runToken !== pollTokenRef.current) return;
@@ -978,6 +1088,7 @@ export function App() {
                 setPendingIntelNotice("");
               }
               setCountdownSec(0);
+              void applyFinalLiveStatusWhenReady();
             }
           }
         }
@@ -1080,6 +1191,11 @@ export function App() {
   // Hide verdict while auto-refresh is actively running; reveal provisional verdict if retries exhausted.
   const blockVerdictWhileRefreshing = Boolean(!hardDisplayReady && hasPendingIntelOnFinal && pendingIntelInProgress);
   const showFinalVerdict = Boolean(result && shouldShowResult && !blockVerdictWhileRefreshing);
+  const showProvisionalResultNotice = Boolean(
+    result
+      && showFinalVerdict
+      && (!isCompleteAnalysisResult(result) || (hardDisplayReady && liveMeta && !liveMeta.final))
+  );
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -1239,6 +1355,15 @@ export function App() {
           </div>
         )}
 
+        {showProvisionalResultNotice && result && !loading && (
+          <div className="result-section">
+            <div className="reason-item reason-item--ai-summary">
+              <span className="reason-item__icon">ℹ️</span>
+              <span>{t.provisionalResultNotice}</span>
+            </div>
+          </div>
+        )}
+
         {/* Results */}
         {showFinalVerdict && result && !loading && (
           <div className="verdict">
@@ -1321,6 +1446,26 @@ export function App() {
                     <span className="url-row__label">{t.analyzedUrl}</span>
                     <span className="url-row__value">{result.analyzed_url}</span>
                   </div>
+                )}
+                {result.message_link_count && result.message_link_count > 1 && (
+                  <>
+                    <div className="url-row">
+                      <span className="url-row__label">{t.messageLinksSummary}</span>
+                      <span className="url-row__value">{result.message_link_count}</span>
+                    </div>
+                    <div className="url-row">
+                      <span className="url-row__label">{t.messageLinksAnalyzed}</span>
+                      <span className="url-row__value">
+                        {result.message_links_analyzed_count ?? result.message_link_count}
+                      </span>
+                    </div>
+                    {result.selected_message_url && (
+                      <div className="url-row">
+                        <span className="url-row__label">{t.selectedMessageLink}</span>
+                        <span className="url-row__value">{result.selected_message_url}</span>
+                      </div>
+                    )}
+                  </>
                 )}
                 {hasSubdomainFocus && (
                   <div
