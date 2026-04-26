@@ -139,7 +139,7 @@ const translations = {
     fullLinksTitle: "Full links",
     messageLinksSummary: "Links found in message",
     messageLinksAnalyzed: "Links analyzed",
-    selectedMessageLink: "Highest-risk link selected",
+    selectedMessageLink: "Link shown in the main result",
     statusPass: "Passed",
     statusFail: "Failed",
     statusNa: "N/A",
@@ -187,7 +187,7 @@ const translations = {
     pendingIntelAutoDone: "External checks were updated automatically.",
     pendingIntelAutoStillPending: "Some external checks are still updating. Keep this page open; the current result is still valid for now.",
     forcedDisplayAfterTimeout: "External checks are still updating. Showing the latest available result now (after 60 seconds).",
-    provisionalResultNotice: "This is a temporary result. The final result will update automatically in the next few seconds.",
+    provisionalResultNotice: "This is a temporary result. The message contains multiple links and we are checking all of them. We are refreshing the result automatically now.",
   },
   he: {
     subtitle: "קיבלת הודעה חשודה או קישור מוזר? הדבק כאן ונבדוק בשבילך.",
@@ -231,7 +231,7 @@ const translations = {
     fullLinksTitle: "קישורים מלאים",
     messageLinksSummary: "קישורים שנמצאו בהודעה",
     messageLinksAnalyzed: "קישורים שנבדקו",
-    selectedMessageLink: "הקישור בעל הסיכון הגבוה ביותר שנבחר",
+    selectedMessageLink: "הקישור שמוצג בתוצאה הראשית",
     statusPass: "עבר",
     statusFail: "נכשל",
     statusNa: "לא רלוונטי",
@@ -278,7 +278,7 @@ const translations = {
     pendingIntelAutoDone: "הבדיקות החיצוניות עודכנו אוטומטית.",
     pendingIntelAutoStillPending: "חלק מהבדיקות החיצוניות עדיין בעדכון. אפשר להשאיר את הדף פתוח; התוצאה הנוכחית תקפה לעכשיו.",
     forcedDisplayAfterTimeout: "הבדיקות החיצוניות עדיין מתעדכנות. מוצגת עכשיו התוצאה העדכנית הזמינה (לאחר 60 שניות).",
-    provisionalResultNotice: "זו תוצאה זמנית. התוצאה הסופית תתעדכן אוטומטית בשניות הקרובות.",
+    provisionalResultNotice: "זוהי תוצאה זמנית. ההודעה מכילה מס' קישורים ואנו בודקים את כולם. אנחנו מרעננים את התוצאה אוטומטית כעת.",
   }
 } as const;
 
