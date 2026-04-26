@@ -2611,6 +2611,8 @@ def analyze():
                         "message": message,
                         "language": language,
                         "_single_url_only": True,
+                        "_skip_ai_model_intent": True,
+                        "_skip_ai_summary": True,
                     },
                 )
             if not resp.is_json:
@@ -2649,6 +2651,16 @@ def analyze():
             ]
             result["selected_message_url"] = selected.get("submitted_url", "")
             result["selected_message_url_index"] = selected.get("index", 0)
+            result["ai_model_summary"] = build_ai_model_summary(
+                message=message,
+                submitted_url=result.get("submitted_url", "") or "",
+                analyzed_url=result.get("analyzed_url", "") or "",
+                language=language,
+                risk_level=result.get("risk_level", "Low") or "Low",
+                reason_keys=list(dict.fromkeys(reason_keys)),
+                domain_verdict=result.get("domain_verdict") or {},
+                tld_country_code=result.get("tld_country_code", "") or "",
+            )
             return jsonify(result)
 
     extracted_url = extract_first_url(message)
@@ -2703,7 +2715,10 @@ def analyze():
 
     text_score, text_reason_keys = analyze_message_text(message)
     intent_score, intent_reason_keys = analyze_message_intent(message)
-    model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
+    if payload.get("_skip_ai_model_intent"):
+        model_intent_score, model_intent_reason_keys = 0, []
+    else:
+        model_intent_score, model_intent_reason_keys = analyze_message_intent_with_model(message, url_to_check)
     page_score, page_reason_keys, page_context = analyze_page_language_signals(url_to_check)
     structure_score, structure_reason_keys, structure_context = analyze_site_structure_signal(url_to_check)
     url_reason_keys.extend(page_reason_keys)
@@ -3065,16 +3080,19 @@ def analyze():
         "is_safe": risk_level == "Low",
         "reason_keys": list(dict.fromkeys(reason_keys)),
     }
-    model_intent_summary = build_ai_model_summary(
-        message=message,
-        submitted_url=normalized_submitted or "",
-        analyzed_url=url_to_check or "",
-        language=language,
-        risk_level=risk_level,
-        reason_keys=list(dict.fromkeys(reason_keys)),
-        domain_verdict=domain_verdict,
-        tld_country_code=url_context.get("tld_country_code", ""),
-    )
+    if payload.get("_skip_ai_summary"):
+        model_intent_summary = ""
+    else:
+        model_intent_summary = build_ai_model_summary(
+            message=message,
+            submitted_url=normalized_submitted or "",
+            analyzed_url=url_to_check or "",
+            language=language,
+            risk_level=risk_level,
+            reason_keys=list(dict.fromkeys(reason_keys)),
+            domain_verdict=domain_verdict,
+            tld_country_code=url_context.get("tld_country_code", ""),
+        )
 
     return jsonify(
         {
