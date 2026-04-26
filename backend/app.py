@@ -69,7 +69,7 @@ LIVE_ANALYSIS_CACHE: dict[str, dict] = {}
 GSB_RESULT_CACHE: dict[str, dict] = {}
 GSB_DISABLED_UNTIL_TS = 0.0
 # Bump when live-result semantics change to invalidate stale in-memory cache entries.
-LIVE_CACHE_SCHEMA_VERSION = os.getenv("LIVE_CACHE_SCHEMA_VERSION", "2")
+LIVE_CACHE_SCHEMA_VERSION = os.getenv("LIVE_CACHE_SCHEMA_VERSION", "3")
 LIVE_LOCK = threading.Lock()
 WHOIS_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 WEBHOOK_DEPLOY_LOCK = threading.Lock()
@@ -2339,6 +2339,18 @@ def _normalize_live_result_consistency(result: dict | None) -> dict | None:
     return normalized
 
 
+def _is_complete_live_result(result: dict | None) -> bool:
+    """Only cache authoritative full-analysis payloads, not stage snapshots."""
+    if not isinstance(result, dict):
+        return False
+    green_checks = result.get("green_checks")
+    return (
+        isinstance(green_checks, list)
+        and len(green_checks) > 0
+        and isinstance(result.get("link_verdict"), dict)
+    )
+
+
 def _cache_get(url_key: str) -> dict | None:
     now = time.time()
     with LIVE_LOCK:
@@ -2348,14 +2360,21 @@ def _cache_get(url_key: str) -> dict | None:
         if now - float(payload.get("ts", 0)) > LIVE_CACHE_TTL_SEC:
             LIVE_ANALYSIS_CACHE.pop(url_key, None)
             return None
-        return _normalize_live_result_consistency(payload.get("result"))
+        result = _normalize_live_result_consistency(payload.get("result"))
+        if not _is_complete_live_result(result):
+            LIVE_ANALYSIS_CACHE.pop(url_key, None)
+            return None
+        return result
 
 
 def _cache_set(url_key: str, result: dict) -> None:
+    normalized = _normalize_live_result_consistency(result) or result
+    if not _is_complete_live_result(normalized):
+        return
     with LIVE_LOCK:
         LIVE_ANALYSIS_CACHE[url_key] = {
             "ts": time.time(),
-            "result": _normalize_live_result_consistency(result) or result,
+            "result": normalized,
         }
 
 
