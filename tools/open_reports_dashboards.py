@@ -28,14 +28,14 @@ FILES = {
         "remote": f"{REMOTE_DIR}/issue_reports.jsonl",
         "jsonl": DATA_DIR / "issue_reports.jsonl",
         "html": DATA_DIR / "issue_reports.html",
-        "title": "LinkCheck Issue Reports",
+        "title": "דיווחי תקלות",
         "subtitle": "דיווחי תקלות שנשלחו מהטופס באתר",
     },
     "scan_events": {
         "remote": f"{REMOTE_DIR}/scan_events.jsonl",
         "jsonl": DATA_DIR / "scan_events.jsonl",
         "html": DATA_DIR / "scan_events.html",
-        "title": "LinkCheck Usage Report",
+        "title": "דוח שימושים",
         "subtitle": "שימושים ובדיקות שבוצעו בכלי (ללא טקסט הודעה מלא)",
     },
 }
@@ -118,14 +118,6 @@ def sync_file(client: Any, *, password: str, remote_path: str, local_path: Path)
     return len(data), len(data.splitlines()) if data else 0
 
 
-def render_meta_grid(items: list[tuple[str, Any]], wide_last: bool = False) -> str:
-    rendered = []
-    for index, (label, value) in enumerate(items):
-        cls = ' class="meta-grid__wide"' if wide_last and index == len(items) - 1 else ""
-        rendered.append(f"<div{cls}><dt>{esc(label)}</dt><dd>{esc(value) or '-'}</dd></div>")
-    return "\n".join(rendered)
-
-
 def host_text(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
@@ -136,35 +128,51 @@ def host_text(value: Any) -> str:
     return host or registrable
 
 
-def render_issue_card(row: dict[str, Any], index: int) -> str:
+def risk_he(value: Any) -> str:
+    return {"Low": "נמוך", "Medium": "בינוני", "High": "גבוה"}.get(str(value or ""), str(value or "לא ידוע"))
+
+
+def bool_he(value: Any) -> str:
+    return "כן" if bool(value) else "לא"
+
+
+def render_issue_row(row: dict[str, Any], index: int) -> str:
     ts_display, date_value = parse_timestamp(str(row.get("ts") or ""))
-    description = row.get("description") or "No description"
+    description = row.get("description") or "אין תיאור"
     context = row.get("checked_context_text") or ""
     if not context:
         parts = []
         if row.get("url_field"):
-            parts.append(f"[URL checked]\n{row.get('url_field')}")
+            parts.append(f"[קישור שנבדק]\n{row.get('url_field')}")
         if row.get("message_field"):
-            parts.append(f"[Message checked]\n{row.get('message_field')}")
+            parts.append(f"[הודעה שנבדקה]\n{row.get('message_field')}")
         context = "\n\n".join(parts)
     search = " ".join(str(row.get(k) or "") for k in ("ts", "language", "client_ip", "user_agent", "description", "checked_context_text"))
     return f"""
-      <article class="report-card" data-search="{esc(search).lower()}" data-date="{esc(date_value)}">
-        <header class="report-card__header">
-          <div><div class="report-card__eyebrow">#{index}</div><h2>{esc(description)}</h2></div>
-          <div class="report-card__time">{esc(ts_display)}</div>
-        </header>
-        <dl class="meta-grid">
-          {render_meta_grid([("Language", row.get("language")), ("Client IP", row.get("client_ip")), ("User Agent", row.get("user_agent"))], wide_last=True)}
-        </dl>
-        <section class="content-block"><h3>Checked Context</h3><pre>{nl2br(context) or "No checked URL/message was included."}</pre></section>
-      </article>
+      <tr data-search="{esc(search).lower()}" data-date="{esc(date_value)}">
+        <td class="num">{index}</td>
+        <td class="time">{esc(ts_display)}</td>
+        <td>{esc(description)}</td>
+        <td class="ltr">{esc(row.get("client_ip")) or "-"}</td>
+        <td>{esc(row.get("language")) or "-"}</td>
+        <td>
+          <details>
+            <summary>פירוט</summary>
+            <div class="details-panel">
+              <strong>תוכן שנבדק:</strong>
+              <pre>{nl2br(context) or "לא צורפו הודעה או קישור."}</pre>
+              <strong>User-Agent:</strong>
+              <div class="ltr small">{esc(row.get("user_agent")) or "-"}</div>
+            </div>
+          </details>
+        </td>
+      </tr>
     """
 
 
-def render_scan_card(row: dict[str, Any], index: int) -> str:
+def render_scan_row(row: dict[str, Any], index: int) -> str:
     ts_display, date_value = parse_timestamp(str(row.get("ts") or ""))
-    risk = row.get("risk_level") or "Unknown"
+    risk = row.get("risk_level") or "לא ידוע"
     hosts = row.get("message_url_hosts") if isinstance(row.get("message_url_hosts"), list) else []
     hosts_text = ", ".join(filter(None, (host_text(item) for item in hosts)))
     search = " ".join(
@@ -179,36 +187,46 @@ def render_scan_card(row: dict[str, Any], index: int) -> str:
             ",".join(row.get("reason_keys") or []),
         )
     )
+    reason_keys = ", ".join(row.get("reason_keys") or [])
     return f"""
-      <article class="report-card" data-search="{esc(search).lower()}" data-date="{esc(date_value)}">
-        <header class="report-card__header">
-          <div><div class="report-card__eyebrow">#{index}</div><h2>Risk: {esc(risk)}</h2></div>
-          <div class="report-card__time">{esc(ts_display)}</div>
-        </header>
-        <dl class="meta-grid">
-          {render_meta_grid([
-              ("Source", row.get("source")),
-              ("Language", row.get("language")),
-              ("Client IP", row.get("client_ip")),
-              ("Message length", row.get("message_length")),
-              ("URL count", row.get("message_url_count")),
-              ("Analyzed links", row.get("message_links_analyzed_count")),
-              ("Submitted host", host_text(row.get("submitted_url"))),
-              ("Analyzed host", host_text(row.get("analyzed_url"))),
-              ("Selected host", host_text(row.get("selected_message_url"))),
-              ("URL hosts in message", hosts_text),
-              ("Reason keys", ", ".join(row.get("reason_keys") or [])),
-              ("User Agent", row.get("user_agent")),
-          ], wide_last=True)}
-        </dl>
-      </article>
+      <tr data-search="{esc(search).lower()}" data-date="{esc(date_value)}">
+        <td class="num">{index}</td>
+        <td class="time">{esc(ts_display)}</td>
+        <td><span class="risk risk--{esc(str(risk)).lower()}">{esc(risk_he(risk))}</span></td>
+        <td>{esc(row.get("message_url_count")) or "0"}</td>
+        <td>{esc(row.get("message_links_analyzed_count")) or "-"}</td>
+        <td class="ltr">{esc(host_text(row.get("analyzed_url"))) or "-"}</td>
+        <td class="ltr">{esc(hosts_text) or "-"}</td>
+        <td class="ltr">{esc(row.get("client_ip")) or "-"}</td>
+        <td>
+          <details>
+            <summary>עוד</summary>
+            <div class="details-panel">
+              <div><strong>מקור:</strong> {esc(row.get("source")) or "-"}</div>
+              <div><strong>שפה:</strong> {esc(row.get("language")) or "-"}</div>
+              <div><strong>אורך הודעה:</strong> {esc(row.get("message_length")) or "0"}</div>
+              <div><strong>הוזן קישור:</strong> {bool_he(row.get("has_url_field"))}</div>
+              <div><strong>הוזנה הודעה:</strong> {bool_he(row.get("has_message_field"))}</div>
+              <div><strong>דומיין שנבחר:</strong> <span class="ltr">{esc(host_text(row.get("selected_message_url"))) or "-"}</span></div>
+              <div><strong>סיבות:</strong> <span class="ltr">{esc(reason_keys) or "-"}</span></div>
+              <div><strong>User-Agent:</strong> <span class="ltr small">{esc(row.get("user_agent")) or "-"}</span></div>
+            </div>
+          </details>
+        </td>
+      </tr>
     """
 
 
 def render_html(*, title: str, subtitle: str, rows: list[dict[str, Any]], source_path: Path, kind: str) -> str:
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    renderer = render_scan_card if kind == "scan_events" else render_issue_card
-    cards = "\n".join(renderer(row, idx) for idx, row in enumerate(rows, start=1))
+    is_scan = kind == "scan_events"
+    renderer = render_scan_row if is_scan else render_issue_row
+    body_rows = "\n".join(renderer(row, idx) for idx, row in enumerate(rows, start=1))
+    headers = (
+        "<th>#</th><th>זמן</th><th>סיכון</th><th>קישורים</th><th>נותחו</th><th>דומיין שנותח</th><th>דומיינים בהודעה</th><th>IP</th><th>פירוט</th>"
+        if is_scan
+        else "<th>#</th><th>זמן</th><th>תיאור</th><th>IP</th><th>שפה</th><th>פירוט</th>"
+    )
     return f"""<!doctype html>
 <html lang="he" dir="rtl">
 <head>
@@ -216,48 +234,56 @@ def render_html(*, title: str, subtitle: str, rows: list[dict[str, Any]], source
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{esc(title)}</title>
   <style>
-    :root {{ color-scheme: dark; --bg:#071023; --panel:#101f3d; --panel-2:#0c1933; --border:rgba(96,165,250,.22); --text:#edf4ff; --muted:#9fb0ce; --accent:#38bdf8; }}
+    :root {{ color-scheme: dark; --bg:#071023; --panel:#101f3d; --panel-2:#0c1933; --border:rgba(96,165,250,.22); --text:#edf4ff; --muted:#9fb0ce; --accent:#38bdf8; --safe:#22c55e; --warn:#f59e0b; --danger:#ef4444; }}
     * {{ box-sizing:border-box; }}
     body {{ margin:0; font-family:"Segoe UI",Tahoma,Arial,sans-serif; background:radial-gradient(circle at top, rgba(45,140,240,.18), transparent 38rem), var(--bg); color:var(--text); line-height:1.55; }}
-    main {{ width:min(1120px, calc(100% - 32px)); margin:32px auto 56px; }}
+    main {{ width:min(1380px, calc(100% - 24px)); margin:24px auto 44px; }}
     .hero {{ display:flex; gap:16px; justify-content:space-between; align-items:end; margin-bottom:18px; }}
     h1 {{ margin:0 0 6px; font-size:clamp(1.7rem,4vw,2.5rem); }}
     .subtitle {{ margin:0; color:var(--muted); }}
     .stats {{ min-width:160px; padding:14px 18px; border:1px solid var(--border); border-radius:18px; background:rgba(16,31,61,.72); text-align:center; }}
-    .stats strong {{ display:block; font-size:2rem; color:var(--accent); line-height:1; }}
-    .toolbar {{ display:grid; grid-template-columns:1fr 180px; gap:12px; margin:22px 0; direction:ltr; }}
-    input {{ width:100%; padding:13px 15px; color:var(--text); background:var(--panel-2); border:1px solid var(--border); border-radius:14px; outline:none; }}
+    .stats strong {{ display:block; font-size:1.7rem; color:var(--accent); line-height:1; }}
+    .toolbar {{ display:grid; grid-template-columns:1fr 180px; gap:12px; margin:18px 0; direction:ltr; }}
+    input {{ width:100%; padding:10px 12px; color:var(--text); background:var(--panel-2); border:1px solid var(--border); border-radius:12px; outline:none; }}
     input:focus {{ border-color:rgba(56,189,248,.75); }}
-    .report-list {{ display:grid; gap:14px; }}
-    .report-card {{ border:1px solid var(--border); border-radius:22px; background:linear-gradient(180deg, rgba(16,31,61,.92), rgba(12,25,51,.92)); box-shadow:0 16px 50px rgba(0,0,0,.22); overflow:hidden; }}
-    .report-card__header {{ display:flex; justify-content:space-between; gap:18px; padding:18px 20px; border-bottom:1px solid var(--border); }}
-    .report-card__eyebrow {{ color:var(--accent); font-size:.85rem; direction:ltr; text-align:left; }}
-    h2 {{ margin:3px 0 0; font-size:1.15rem; }}
-    .report-card__time {{ color:var(--muted); white-space:nowrap; direction:ltr; }}
-    .meta-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:16px 20px 20px; }}
-    .meta-grid div, .content-block {{ background:rgba(7,16,35,.45); border:1px solid rgba(96,165,250,.12); border-radius:14px; padding:12px; }}
-    .meta-grid__wide {{ grid-column:1 / -1; }}
-    dt, h3 {{ color:var(--muted); font-size:.82rem; margin:0 0 6px; }}
-    dd {{ margin:0; direction:ltr; text-align:left; word-break:break-word; }}
-    .content-block {{ margin:14px 20px 20px; }}
+    .table-wrap {{ border:1px solid var(--border); border-radius:18px; overflow:auto; background:rgba(16,31,61,.78); box-shadow:0 14px 42px rgba(0,0,0,.2); }}
+    table {{ width:100%; border-collapse:collapse; font-size:.92rem; }}
+    th, td {{ padding:9px 10px; border-bottom:1px solid rgba(96,165,250,.12); vertical-align:top; }}
+    th {{ color:var(--muted); font-weight:600; text-align:right; background:rgba(7,16,35,.42); position:sticky; top:0; z-index:1; }}
+    tr:hover td {{ background:rgba(56,189,248,.045); }}
+    .num {{ color:var(--accent); direction:ltr; text-align:left; width:44px; }}
+    .time {{ direction:ltr; white-space:nowrap; color:var(--muted); }}
+    .ltr {{ direction:ltr; text-align:left; word-break:break-word; }}
+    .small {{ font-size:.82rem; color:var(--muted); }}
+    summary {{ cursor:pointer; color:var(--accent); white-space:nowrap; }}
+    .details-panel {{ min-width:280px; max-width:720px; display:grid; gap:6px; margin-top:8px; padding:10px; border:1px solid rgba(96,165,250,.14); border-radius:12px; background:rgba(7,16,35,.58); }}
+    .risk {{ display:inline-flex; padding:2px 8px; border-radius:999px; font-weight:700; }}
+    .risk--low {{ color:var(--safe); background:rgba(34,197,94,.1); }}
+    .risk--medium {{ color:var(--warn); background:rgba(245,158,11,.1); }}
+    .risk--high {{ color:var(--danger); background:rgba(239,68,68,.1); }}
     pre {{ margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; direction:auto; }}
-    .empty {{ padding:28px; border:1px dashed var(--border); border-radius:18px; color:var(--muted); text-align:center; }}
+    .empty {{ padding:22px; border:1px dashed var(--border); border-radius:14px; color:var(--muted); text-align:center; }}
     .hidden {{ display:none; }}
-    @media (max-width:720px) {{ .hero {{ align-items:stretch; flex-direction:column; }} .toolbar,.meta-grid {{ grid-template-columns:1fr; }} .report-card__header {{ flex-direction:column; }} }}
+    @media (max-width:720px) {{ .hero {{ align-items:stretch; flex-direction:column; }} .toolbar {{ grid-template-columns:1fr; }} table {{ min-width:860px; }} }}
   </style>
 </head>
 <body>
   <main>
     <section class="hero">
-      <div><h1>{esc(title)}</h1><p class="subtitle">{esc(subtitle)}<br>Generated at {esc(generated_at)} from <code>{esc(source_path)}</code></p></div>
-      <div class="stats"><strong id="visibleCount">{len(rows)}</strong><span>visible records</span></div>
+      <div><h1>{esc(title)}</h1><p class="subtitle">{esc(subtitle)}<br>נוצר: {esc(generated_at)} · מקור: <code>{esc(source_path)}</code></p></div>
+      <div class="stats"><strong id="visibleCount">{len(rows)}</strong><span>רשומות מוצגות</span></div>
     </section>
-    <section class="toolbar"><input id="searchInput" type="search" placeholder="Search..." /><input id="dateInput" type="date" /></section>
-    <section class="report-list">{cards if cards else '<div class="empty">No records found.</div>'}</section>
+    <section class="toolbar"><input id="searchInput" type="search" placeholder="חיפוש..." /><input id="dateInput" type="date" /></section>
+    <section class="table-wrap">
+      <table>
+        <thead><tr>{headers}</tr></thead>
+        <tbody>{body_rows if body_rows else '<tr><td colspan="9" class="empty">לא נמצאו רשומות.</td></tr>'}</tbody>
+      </table>
+    </section>
   </main>
   <script>
-    const searchInput=document.getElementById('searchInput'), dateInput=document.getElementById('dateInput'), visibleCount=document.getElementById('visibleCount'), cards=Array.from(document.querySelectorAll('.report-card'));
-    function applyFilters() {{ const q=(searchInput.value||'').trim().toLowerCase(), d=dateInput.value||''; let n=0; for (const c of cards) {{ const show=(!q||c.dataset.search.includes(q))&&(!d||c.dataset.date===d); c.classList.toggle('hidden',!show); if(show)n++; }} visibleCount.textContent=n; }}
+    const searchInput=document.getElementById('searchInput'), dateInput=document.getElementById('dateInput'), visibleCount=document.getElementById('visibleCount'), rows=Array.from(document.querySelectorAll('tbody tr[data-search]'));
+    function applyFilters() {{ const q=(searchInput.value||'').trim().toLowerCase(), d=dateInput.value||''; let n=0; for (const r of rows) {{ const show=(!q||r.dataset.search.includes(q))&&(!d||r.dataset.date===d); r.classList.toggle('hidden',!show); if(show)n++; }} visibleCount.textContent=n; }}
     searchInput.addEventListener('input',applyFilters); dateInput.addEventListener('input',applyFilters);
   </script>
 </body>
