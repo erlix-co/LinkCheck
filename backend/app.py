@@ -2520,7 +2520,7 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
     # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
     # Keep raw_url here: when the user pasted a message with multiple links, /analyze
     # must see the original empty URL field and choose the highest-risk link.
-    full_payload = {"url": raw_url, "message": message, "language": language}
+    full_payload = {"url": raw_url, "message": message, "language": language, "_skip_scan_log": True}
     final_result = _run_full_analysis_internal(full_payload)
     transient_intel_keys = {"vt_pending", "urlscan_pending", "gsb_unavailable"}
 
@@ -2661,6 +2661,16 @@ def analyze():
                 domain_verdict=result.get("domain_verdict") or {},
                 tld_country_code=result.get("tld_country_code", "") or "",
             )
+            if not payload.get("_skip_scan_log"):
+                append_scan_event_to_file(
+                    url_field=raw_url,
+                    message_field=message,
+                    language=language,
+                    user_agent=(request.headers.get("User-Agent") or "")[:2000],
+                    client_ip=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200],
+                    result=result,
+                    source="analyze",
+                )
             return jsonify(result)
 
     extracted_url = extract_first_url(message)
@@ -3094,8 +3104,7 @@ def analyze():
             tld_country_code=url_context.get("tld_country_code", ""),
         )
 
-    return jsonify(
-        {
+    response_payload = {
             "score": total_score,
             "risk_level": risk_level,
             "is_green_safe": is_green_safe,
@@ -3124,7 +3133,17 @@ def analyze():
             "link_verdict": link_verdict,
             "ai_model_summary": model_intent_summary,
         }
-    )
+    if not payload.get("_skip_scan_log") and not payload.get("_single_url_only"):
+        append_scan_event_to_file(
+            url_field=raw_url,
+            message_field=message,
+            language=language,
+            user_agent=(request.headers.get("User-Agent") or "")[:2000],
+            client_ip=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200],
+            result=response_payload,
+            source="analyze",
+        )
+    return jsonify(response_payload)
 
 
 @app.post("/analyze/live/start")
@@ -3290,6 +3309,11 @@ def _report_store_path() -> str | None:
     return p or None
 
 
+def _scan_events_store_path() -> str | None:
+    p = (os.getenv("SCAN_EVENTS_STORE_PATH") or "data/scan_events.jsonl").strip()
+    return p or None
+
+
 def _resolved_report_store_path() -> str | None:
     """Resolve REPORT_STORE_PATH relative to this file's directory (stable regardless of cwd)."""
     raw = _report_store_path()
@@ -3301,8 +3325,73 @@ def _resolved_report_store_path() -> str | None:
     return os.path.normpath(os.path.join(backend_dir, raw))
 
 
+def _resolved_scan_events_store_path() -> str | None:
+    """Resolve scan-event storage relative to this file's directory."""
+    raw = _scan_events_store_path()
+    if not raw:
+        return None
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(backend_dir, raw))
+
+
 def _file_store_configured() -> bool:
     return _report_store_path() is not None
+
+
+def _host_summary(url: str) -> dict:
+    normalized = normalize_url_for_checks(url or "")
+    parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}") if normalized else None
+    host = (parsed.hostname or "").lower() if parsed else ""
+    return {
+        "host": host or None,
+        "registrable_domain": get_registrable_domain(host) if host else None,
+    }
+
+
+def append_scan_event_to_file(
+    *,
+    url_field: str,
+    message_field: str,
+    language: str,
+    user_agent: str,
+    client_ip: str,
+    result: dict,
+    source: str,
+) -> None:
+    """Append privacy-conscious usage analytics without storing full message text."""
+    abs_path = _resolved_scan_events_store_path()
+    if not abs_path:
+        return
+    parent = os.path.dirname(abs_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    message_urls = extract_urls(message_field or "")
+    submitted_url = result.get("submitted_url") or url_field or (message_urls[0] if message_urls else "")
+    analyzed_url = result.get("analyzed_url") or ""
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "language": language,
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+        "has_url_field": bool((url_field or "").strip()),
+        "has_message_field": bool((message_field or "").strip()),
+        "message_length": len(message_field or ""),
+        "message_url_count": len(message_urls),
+        "message_url_hosts": [_host_summary(url) for url in message_urls],
+        "submitted_url": _host_summary(submitted_url),
+        "analyzed_url": _host_summary(analyzed_url),
+        "risk_level": result.get("risk_level"),
+        "score": result.get("score"),
+        "reason_keys": result.get("reason_keys") or [],
+        "message_links_analyzed_count": result.get("message_links_analyzed_count"),
+        "selected_message_url": _host_summary(result.get("selected_message_url") or ""),
+    }
+    with open(abs_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _format_checked_scan_context(url_field: str, message_field: str) -> str:
