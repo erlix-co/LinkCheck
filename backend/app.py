@@ -2574,6 +2574,19 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
         job["result"] = final_result
 
     _cache_set(cache_key, final_result)
+    if not payload.get("_skip_scan_log"):
+        try:
+            append_scan_event_to_file(
+                url_field=raw_url,
+                message_field=message,
+                language=language,
+                user_agent=str(payload.get("_scan_user_agent") or "")[:2000],
+                client_ip=str(payload.get("_scan_client_ip") or "")[:200],
+                result=final_result,
+                source="live",
+            )
+        except Exception:
+            pass
 
 
 @app.post("/analyze")
@@ -3153,6 +3166,8 @@ def analyze_live_start():
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
+    scan_user_agent = (request.headers.get("User-Agent") or "")[:2000]
+    scan_client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200]
     if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
         return jsonify({"ok": False, "error": "payload_too_large"}), 413
     submitted_url = normalize_url_for_checks(raw_url or extract_first_url(message))
@@ -3162,6 +3177,18 @@ def analyze_live_start():
     cache_key = _live_cache_key(submitted_url, message, language)
     cached = _cache_get(cache_key)
     if cached:
+        try:
+            append_scan_event_to_file(
+                url_field=raw_url,
+                message_field=message,
+                language=language,
+                user_agent=scan_user_agent,
+                client_ip=scan_client_ip,
+                result=cached,
+                source="live_cache",
+            )
+        except Exception:
+            pass
         return jsonify(
             {
                 "ok": True,
@@ -3193,7 +3220,20 @@ def analyze_live_start():
             "payload": {"url": raw_url, "message": message, "language": language},
         }
 
-    worker = threading.Thread(target=_run_live_pipeline, args=(job_id, {"url": raw_url, "message": message, "language": language}), daemon=True)
+    worker = threading.Thread(
+        target=_run_live_pipeline,
+        args=(
+            job_id,
+            {
+                "url": raw_url,
+                "message": message,
+                "language": language,
+                "_scan_user_agent": scan_user_agent,
+                "_scan_client_ip": scan_client_ip,
+            },
+        ),
+        daemon=True,
+    )
     worker.start()
 
     return jsonify(

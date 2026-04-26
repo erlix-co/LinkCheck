@@ -556,7 +556,7 @@ export function App() {
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(lastScanPayload),
+              body: JSON.stringify({ ...lastScanPayload, _skip_scan_log: true }),
             },
             FINAL_ANALYZE_TIMEOUT_MS
           );
@@ -778,7 +778,7 @@ export function App() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language, _skip_scan_log: true }),
         },
         FINAL_ANALYZE_TIMEOUT_MS
       );
@@ -1004,7 +1004,7 @@ export function App() {
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+                  body: JSON.stringify({ url: trimmed, message: trimmedMessage, language, _skip_scan_log: true }),
                 },
                 FINAL_ANALYZE_TIMEOUT_MS
               );
