@@ -500,7 +500,7 @@ I18N = {
         "short_link_expanded": "HTTP redirects were followed to the final URL.",
         "short_link_unresolved": "Could not follow the full redirect chain (error, loop, or blocked hop).",
         "short_link_destination_blocked": "Redirects ended on a provider block/interstitial page; analysis uses the submitted link.",
-        "short_http_to_https_caution": "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
+        "short_http_to_https_caution": "The short link itself is not encrypted. It redirected to an encrypted destination, but this is not a safety approval.",
         "short_https_to_http_downgrade": "The short link started as secure HTTPS, but the final destination is not secure. Do not enter personal details on the final page.",
         "shortlink_use_original_recommended": "The final destination appears safe, but the short link itself adds uncertainty. Prefer using the original full link directly.",
         "hebrew_phishing_page_signals": "The page content in Hebrew includes phishing-style pressure/action terms.",
@@ -574,7 +574,7 @@ I18N = {
         "short_link_expanded": "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
         "short_link_unresolved": "לא ניתן היה למלא את שרשרת ההפניות (שגיאה, לולאה, או צעד חסום).",
         "short_link_destination_blocked": "ההפניות הסתיימו בדף חסימה/ביניים של ספק; הניתוח מבוסס על הקישור שנשלח.",
-        "short_http_to_https_caution": "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
+        "short_http_to_https_caution": "הקישור המקוצר עצמו אינו מוצפן. הוא הופנה ליעד מוצפן, אך זו אינה אינדיקציה לבטיחות הקישור.",
         "short_https_to_http_downgrade": "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
         "shortlink_use_original_recommended": "היעד הסופי נראה בטוח, אך קישור מקוצר מוסיף אי-ודאות. מומלץ להשתמש ישירות בקישור המלא המקורי.",
         "hebrew_phishing_page_signals": "בתוכן הדף בעברית נמצאו מונחי לחץ/פעולה שמאפיינים פישינג.",
@@ -2397,7 +2397,7 @@ def _cache_set(url_key: str, result: dict) -> None:
         }
 
 
-def _live_cache_key(submitted_url: str, message: str, language: str) -> str:
+def _live_cache_key(submitted_url: str, message: str, language: str, link_only_mode: bool = False) -> str:
     """
     Cache key for live analysis.
     Includes URL + normalized message + language to avoid returning stale text/context
@@ -2405,7 +2405,10 @@ def _live_cache_key(submitted_url: str, message: str, language: str) -> str:
     """
     normalized_url = normalize_url_for_checks(submitted_url) or ""
     normalized_message = " ".join((message or "").split())
-    blob = f"{LIVE_CACHE_SCHEMA_VERSION}\n{language}\n{normalized_url}\n{normalized_message}"
+    blob = (
+        f"{LIVE_CACHE_SCHEMA_VERSION}\n{language}\n{normalized_url}\n{normalized_message}\n"
+        f"link_only={1 if link_only_mode else 0}"
+    )
     digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     return f"v{LIVE_CACHE_SCHEMA_VERSION}:{normalized_url}::{digest[:20]}"
 
@@ -2468,8 +2471,9 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
+    link_only_mode = bool(payload.get("_link_only_mode"))
     submitted_url = normalize_url_for_checks(raw_url or extract_first_url(message))
-    cache_key = _live_cache_key(submitted_url, message, language)
+    cache_key = _live_cache_key(submitted_url, message, language, link_only_mode)
 
     if not submitted_url:
         with LIVE_LOCK:
@@ -2544,7 +2548,13 @@ def _run_live_pipeline(job_id: str, payload: dict) -> None:
     # Stage 3: full existing analysis with external intel (VT/GSB/URLScan)
     # Keep raw_url here: when the user pasted a message with multiple links, /analyze
     # must see the original empty URL field and choose the highest-risk link.
-    full_payload = {"url": raw_url, "message": message, "language": language, "_skip_scan_log": True}
+    full_payload = {
+        "url": raw_url,
+        "message": message,
+        "language": language,
+        "_skip_scan_log": True,
+        "_link_only_mode": link_only_mode,
+    }
     final_result = _run_full_analysis_internal(full_payload)
     transient_intel_keys = {"vt_pending", "urlscan_pending", "gsb_unavailable"}
 
@@ -2728,6 +2738,7 @@ def analyze():
     final_is_https = url_to_check.lower().startswith("https://") if url_to_check else False
     final_is_http = url_to_check.lower().startswith("http://") if url_to_check else False
     original_host = (urlparse(normalized_submitted).hostname or "").lower() if normalized_submitted else ""
+    source_is_known_shortener = _is_known_shortener_host(original_host)
     # Show redirect / short-link trust row when we followed hops OR domain is a known shortener list.
     was_short_link = bool(normalized_submitted) and (
         len(redirect_chain) > 1
@@ -2888,9 +2899,9 @@ def analyze():
         + model_intent_reason_keys
         + intel_reason_keys
     )
-    if submitted_is_http and final_is_https and short_link_resolved:
+    if submitted_is_http and final_is_https and short_link_resolved and source_is_known_shortener:
         reason_keys.append("short_http_to_https_caution")
-    if submitted_is_https and final_is_http and short_link_resolved:
+    if submitted_is_https and final_is_http and short_link_resolved and source_is_known_shortener:
         reason_keys.append("short_https_to_http_downgrade")
         total_score = max(total_score, 45)
 
@@ -2910,9 +2921,12 @@ def analyze():
     )
     shortlink_message_warning = any(k in MESSAGE_WARNING_KEYS for k in reason_keys)
     if trusted_shortlink_destination and short_link_resolved:
-        reason_keys.append("shortlink_use_original_recommended")
-        if not any(k in reason_keys for k in shortlink_hard_risk_keys):
-            if not shortlink_intel_bad and not shortlink_message_warning:
+        destination_has_hard_risk = any(k in reason_keys for k in shortlink_hard_risk_keys)
+        if not destination_has_hard_risk and not shortlink_intel_bad:
+            # Only recommend the full destination URL when the destination itself
+            # has no strong negative indicators.
+            reason_keys.append("shortlink_use_original_recommended")
+            if not shortlink_message_warning:
                 total_score = min(total_score, 18)
             else:
                 total_score = min(total_score, 35)
@@ -3196,6 +3210,7 @@ def analyze_live_start():
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
+    link_only_mode = bool(payload.get("_link_only_mode"))
     scan_user_agent = (request.headers.get("User-Agent") or "")[:2000]
     scan_client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200]
     if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
@@ -3204,7 +3219,7 @@ def analyze_live_start():
     if not submitted_url:
         return jsonify({"ok": False, "error": "need_input", "reasons": [t(language, "need_input")]}), 400
 
-    cache_key = _live_cache_key(submitted_url, message, language)
+    cache_key = _live_cache_key(submitted_url, message, language, link_only_mode)
     cached = _cache_get(cache_key)
     if cached:
         try:
@@ -3247,7 +3262,7 @@ def analyze_live_start():
             "steps": _steps_payload(1, False),
             "status_text": t(language, "live_progress"),
             "result": snapshot,
-            "payload": {"url": raw_url, "message": message, "language": language},
+            "payload": {"url": raw_url, "message": message, "language": language, "_link_only_mode": link_only_mode},
         }
 
     worker = threading.Thread(
@@ -3258,6 +3273,7 @@ def analyze_live_start():
                 "url": raw_url,
                 "message": message,
                 "language": language,
+                "_link_only_mode": link_only_mode,
                 "_scan_user_agent": scan_user_agent,
                 "_scan_client_ip": scan_client_ip,
             },
