@@ -3211,6 +3211,7 @@ def analyze_live_start():
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
     link_only_mode = bool(payload.get("_link_only_mode"))
+    force_live_fresh = bool(payload.get("_force_live_fresh"))
     scan_user_agent = (request.headers.get("User-Agent") or "")[:2000]
     scan_client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200]
     if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
@@ -3220,7 +3221,7 @@ def analyze_live_start():
         return jsonify({"ok": False, "error": "need_input", "reasons": [t(language, "need_input")]}), 400
 
     cache_key = _live_cache_key(submitted_url, message, language, link_only_mode)
-    cached = _cache_get(cache_key)
+    cached = None if force_live_fresh else _cache_get(cache_key)
     if cached:
         try:
             append_scan_event_to_file(
@@ -3262,7 +3263,13 @@ def analyze_live_start():
             "steps": _steps_payload(1, False),
             "status_text": t(language, "live_progress"),
             "result": snapshot,
-            "payload": {"url": raw_url, "message": message, "language": language, "_link_only_mode": link_only_mode},
+            "payload": {
+                "url": raw_url,
+                "message": message,
+                "language": language,
+                "_link_only_mode": link_only_mode,
+                "_force_live_fresh": force_live_fresh,
+            },
         }
 
     worker = threading.Thread(
@@ -3274,6 +3281,7 @@ def analyze_live_start():
                 "message": message,
                 "language": language,
                 "_link_only_mode": link_only_mode,
+                "_force_live_fresh": force_live_fresh,
                 "_scan_user_agent": scan_user_agent,
                 "_scan_client_ip": scan_client_ip,
             },

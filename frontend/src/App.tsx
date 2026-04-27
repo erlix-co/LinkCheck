@@ -91,6 +91,7 @@ type ScanPayload = {
   message: string;
   language: Language;
   _link_only_mode?: boolean;
+  _force_live_fresh?: boolean;
 };
 
 /* ═══════════════════════════════════════
@@ -867,6 +868,7 @@ export function App() {
       message: trimmedMessage,
       language,
       ...(linkOnlyMode ? { _link_only_mode: true } : {}),
+      ...(linkOnlyMode ? { _force_live_fresh: true } : {}),
       ...(skipScanLog ? { _skip_scan_log: true } : {}),
     });
     setLastScanPayload(makeScanPayload(false));
