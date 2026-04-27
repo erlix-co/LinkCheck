@@ -432,16 +432,20 @@ const seoContent = {
     faqTitle: "Frequently asked questions",
     faqs: [
       {
-        q: "Can LinkCheck detect phishing in Hebrew messages?",
-        a: "Yes. LinkCheck includes Hebrew-aware signals and combines message intent with technical URL checks.",
+        q: "Can LinkCheck detect phishing in all languages?",
+        a: "LinkCheck can analyze suspicious links in any language, and it also includes dedicated semantic and phishing signals for Hebrew and English message content.",
       },
       {
         q: "Does LinkCheck analyze short links like bit.ly?",
         a: "Yes. The scanner expands short links and evaluates the final destination domain before returning the final result.",
       },
       {
-        q: "Is the result shown immediately final?",
-        a: "Not always. You may first see a temporary result while external checks finish, then a final verdict.",
+        q: "What happens when a message contains more than one link?",
+        a: "LinkCheck extracts all links in the message, analyzes multiple links, and presents the highest-risk link in the main result while still considering the full message context.",
+      },
+      {
+        q: "Are scans saved automatically on the server?",
+        a: "Yes. The system stores privacy-conscious scan event logs for monitoring and troubleshooting, while avoiding full message-body storage in usage analytics.",
       },
     ],
   },
@@ -457,16 +461,20 @@ const seoContent = {
     faqTitle: "שאלות נפוצות",
     faqs: [
       {
-        q: "האם LinkCheck יודע לזהות פישינג גם בהודעות בעברית?",
-        a: "כן. LinkCheck כולל אותות מותאמים לעברית ומשלב בין ניתוח תוכן ההודעה לבדיקות טכניות של הקישור.",
+        q: "האם LinkCheck יודע לזהות פישינג בכל השפות?",
+        a: "LinkCheck יודע לנתח קישורים חשודים בכל שפה, ובנוסף כולל אותות סמנטיים ואותות פישינג ייעודיים במיוחד לתוכן הודעות בעברית ובאנגלית.",
       },
       {
         q: "האם LinkCheck בודק גם קישורים מקוצרים כמו bit.ly?",
         a: "כן. הסורק מרחיב קישורים מקוצרים ובודק את דומיין היעד הסופי לפני החזרת תוצאה סופית.",
       },
       {
-        q: "האם התוצאה שמוצגת מיד היא תמיד סופית?",
-        a: "לא תמיד. לעיתים מוצגת תחילה תוצאה זמנית בזמן שבדיקות חיצוניות מסתיימות, ולאחר מכן תוצאה סופית.",
+        q: "מה קורה כשיש בהודעה יותר מקישור אחד?",
+        a: "LinkCheck מחלץ את כל הקישורים מההודעה, מבצע ניתוח למספר קישורים, ומציג בתוצאה הראשית את הקישור בעל הסיכון הגבוה ביותר תוך התחשבות בהקשר המלא של ההודעה.",
+      },
+      {
+        q: "האם הבדיקות נשמרות באופן אוטומטי בשרת המערכת?",
+        a: "המערכת שומרת באופן אוטומטי לוגים תפעוליים מצומצמים לצורכי ניטור ושיפור שירות, תוך הקפדה על אחסון פרטני וזהיר וללא שמירת תוכן ההודעה בלוגי השימוש.",
       },
     ],
   },
