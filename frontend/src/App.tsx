@@ -348,7 +348,7 @@ const reasonI18n = {
     gsb_unavailable: "Google Safe Browsing check is unavailable right now.",
     short_link_expanded: "HTTP redirects were followed to the final URL.",
     short_http_to_https_caution:
-      "The short link itself is not encrypted, but it redirects to a known secure destination. Prefer opening the full secure link directly.",
+      "The short link itself is not encrypted. It redirected to an encrypted destination, but this is not a safety approval.",
     short_https_to_http_downgrade:
       "The short link starts as secure HTTPS but ends at an unsecure page. Avoid entering personal details on the final page.",
     shortlink_use_original_recommended:
@@ -409,7 +409,7 @@ const reasonI18n = {
     gsb_unavailable: "בדיקת Google Safe Browsing אינה זמינה כרגע.",
     short_link_expanded: "בוצע מעקב אחרי הפניות עד לכתובת היעד הסופית.",
     short_http_to_https_caution:
-      "הקישור המקוצר עצמו אינו מוצפן, אך הוא מפנה ליעד מאובטח ומוכר. מומלץ לפתוח ישירות את הקישור המלא והמאובטח.",
+      "הקישור המקוצר עצמו אינו מוצפן. הוא הופנה ליעד מוצפן, אך זו אינה אינדיקציה לבטיחות הקישור.",
     short_https_to_http_downgrade:
       "הקישור המקוצר התחיל כמאובטח, אך יעד הסיום אינו מאובטח. מומלץ לא להזין פרטים אישיים בדף היעד.",
     shortlink_use_original_recommended:
