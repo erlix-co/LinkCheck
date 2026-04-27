@@ -298,6 +298,70 @@ body::before {
   margin: 0;
 }
 
+.seo-content {
+  width: 100%;
+  max-width: 720px;
+  margin-top: var(--space-lg);
+  padding: 18px 20px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(17, 46, 92, 0.45), rgba(10, 26, 52, 0.5));
+}
+
+.seo-content h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+  color: #dff0ff;
+}
+
+.seo-content h3 {
+  margin: 14px 0 8px;
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+  color: #cbe8ff;
+}
+
+.seo-content p {
+  margin: 0;
+  color: var(--color-text-dim);
+  line-height: 1.65;
+  font-size: 0.88rem;
+}
+
+.seo-content__list {
+  margin: 10px 0 0;
+  padding-inline-start: 18px;
+  color: #e4f3ff;
+  display: grid;
+  gap: 6px;
+  font-size: 0.84rem;
+}
+
+.seo-faq {
+  display: grid;
+  gap: 8px;
+}
+
+.seo-faq__item {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  background: rgba(15, 32, 63, 0.55);
+  padding: 8px 10px;
+}
+
+.seo-faq__item summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #d4ecff;
+  font-size: 0.84rem;
+}
+
+.seo-faq__item p {
+  margin-top: 8px;
+  font-size: 0.81rem;
+}
+
 /* ═══════════════════════════════════════
    CARD — MAIN CONTAINER
    ═══════════════════════════════════════ */
