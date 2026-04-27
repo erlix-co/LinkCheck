@@ -373,6 +373,7 @@ ACTION_SECURITY_TOKENS = {
 }
 GENERIC_SAFE_SUBDOMAIN_LABELS = {
     "www", "m", "mail", "api", "cdn", "static", "img", "images", "assets", "docs", "help", "status",
+    "landing", "pages", "lp", "go", "news", "blog",
 }
 GENERIC_NON_IDENTITY_TOKENS = {
     "login",
