@@ -178,6 +178,10 @@ const translations = {
     analysisSteps: "Analysis steps",
     parallelCheckNotice: "The check runs across multiple servers in parallel and usually takes about half a minute to a minute.",
     countdownLabel: "Estimated time left",
+    scanStatusTemporary: "Temporary result - scan is still running",
+    scanStatusTemporaryDetail: "The displayed verdict may still change when external checks complete.",
+    scanStatusFinal: "Final result - scan completed",
+    scanStatusFinalDetail: "All available checks finished. This is the final verdict for this scan.",
     liveRateLimited: "Too many checks were sent in a short time. Please wait a few seconds and try again.",
     liveNetworkSlow: "The network is slow or unstable. Please try again.",
     liveServerUnavailable: "The service is temporarily unavailable. Please try again shortly.",
@@ -269,6 +273,10 @@ const translations = {
     analysisSteps: "שלבי בדיקה",
     parallelCheckNotice: "הבדיקה מתבצעת במגוון שרתים במקביל, והיא לוקחת לרוב כחצי דקה עד דקה.",
     countdownLabel: "זמן משוער לסיום",
+    scanStatusTemporary: "תוצאה זמנית - הסריקה עדיין מתבצעת",
+    scanStatusTemporaryDetail: "הדירוג שמוצג כרגע עשוי להשתנות לאחר השלמת הבדיקות החיצוניות.",
+    scanStatusFinal: "תוצאה סופית - הסריקה הושלמה",
+    scanStatusFinalDetail: "כל הבדיקות הזמינות הסתיימו. זו התוצאה הסופית של הסריקה.",
     liveRateLimited: "נשלחו יותר מדי בדיקות בזמן קצר. אנא המתן כמה שניות ונסה שוב.",
     liveNetworkSlow: "החיבור איטי או לא יציב. אנא נסה שוב.",
     liveServerUnavailable: "השירות אינו זמין כרגע. אנא נסה שוב בעוד זמן קצר.",
@@ -1200,11 +1208,13 @@ export function App() {
   // Show verdict/details only after live pipeline reports final (countdown covers the wait).
   const shouldShowResult = Boolean(result) && (!liveMeta || liveMeta.final || hardDisplayReady);
   const hasPendingIntelOnFinal = Boolean(result && shouldShowResult && hasPendingExternalIntel(result));
+  const isLiveFinal = Boolean(liveMeta?.final);
   const pendingAtCountdownZeroBeforeFinal = Boolean(liveMeta && !liveMeta.final && countdownSec === 0);
   const pendingNoticeGateOpen = Boolean(hardDisplayReady || countdownSec === 0);
   const showPendingIntelPanel = Boolean(
     pendingNoticeGateOpen
       && !hardDisplayReady
+      && !isLiveFinal
       && (pendingAtCountdownZeroBeforeFinal || (result && shouldShowResult && (hasPendingIntelOnFinal || pendingIntelNotice)))
   );
   // Keep verdict visible while background auto-refresh runs.
@@ -1215,6 +1225,13 @@ export function App() {
       && showFinalVerdict
       && (!isCompleteAnalysisResult(result) || (hardDisplayReady && liveMeta && !liveMeta.final))
   );
+  const isFinalScanState = Boolean((liveMeta && liveMeta.final) || (!liveMeta && showFinalVerdict));
+  const showTemporaryScanStatusBanner = Boolean(result && showFinalVerdict && !isFinalScanState);
+  const showFinalScanStatusBanner = Boolean(result && showFinalVerdict && isFinalScanState);
+  const showScanStatusBanner = showTemporaryScanStatusBanner || showFinalScanStatusBanner;
+  const scanStatusTitle = isFinalScanState ? t.scanStatusFinal : t.scanStatusTemporary;
+  const scanStatusDetail = isFinalScanState ? t.scanStatusFinalDetail : t.scanStatusTemporaryDetail;
+  const scanStatusIcon = isFinalScanState ? "✅" : "⏳";
   const domainVerdict = result?.domain_verdict;
   const linkVerdict = result?.link_verdict;
 
@@ -1379,6 +1396,16 @@ export function App() {
             <div className="reason-item reason-item--ai-summary">
               <span className="reason-item__icon">ℹ️</span>
               <span>{t.provisionalResultNotice}</span>
+            </div>
+          </div>
+        )}
+
+        {showScanStatusBanner && (
+          <div className={`scan-status-banner ${isFinalScanState ? "scan-status-banner--final" : "scan-status-banner--pending"}`}>
+            <span className={`scan-status-banner__icon ${isFinalScanState ? "" : "scan-status-banner__icon--spinning"}`} aria-hidden>{scanStatusIcon}</span>
+            <div>
+              <div className="scan-status-banner__title">{scanStatusTitle}</div>
+              <div className="scan-status-banner__detail">{scanStatusDetail}</div>
             </div>
           </div>
         )}

@@ -610,6 +610,65 @@ body::before {
   gap: var(--space-sm);
 }
 
+.scan-status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  margin-bottom: var(--space-md);
+  animation: fadeSlideUp 0.32s ease both;
+}
+
+.scan-status-banner__icon {
+  display: inline-flex;
+  font-size: 1rem;
+  margin-top: 1px;
+}
+
+.scan-status-banner__icon--spinning {
+  animation: spinPulse 1s linear infinite;
+  transform-origin: center;
+}
+
+.scan-status-banner__title {
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.scan-status-banner__detail {
+  font-size: 0.78rem;
+  color: var(--color-text-dim);
+  line-height: 1.4;
+}
+
+.scan-status-banner--pending {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.06));
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.scan-status-banner--pending .scan-status-banner__title {
+  color: #f5d38a;
+}
+
+.scan-status-banner--final {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.14), rgba(34, 197, 94, 0.06));
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.scan-status-banner--final .scan-status-banner__title {
+  color: #92e2b0;
+}
+
+@keyframes spinPulse {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.08); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
 /* URL info */
 .url-row {
   display: flex;
