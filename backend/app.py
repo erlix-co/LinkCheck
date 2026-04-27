@@ -2620,6 +2620,8 @@ def analyze():
     language = "he" if (payload.get("language", "") or "").lower() == "he" else "en"
     raw_url = (payload.get("url", "") or "").strip()
     message = (payload.get("message", "") or "").strip()
+    original_message = message
+    link_only_mode = bool(payload.get("_link_only_mode"))
 
     if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:
         return (
@@ -2636,7 +2638,7 @@ def analyze():
         )
 
     # If user provided full message, extract URL automatically.
-    message_urls = extract_urls(message)
+    message_urls = extract_urls(original_message)
     if not raw_url and len(message_urls) > 1 and not payload.get("_single_url_only"):
         analyzed_links: list[dict] = []
         for idx, link in enumerate(message_urls[:MAX_MESSAGE_URLS_TO_ANALYZE]):
@@ -2645,11 +2647,12 @@ def analyze():
                     "/analyze",
                     json={
                         "url": link,
-                        "message": message,
+                        "message": "" if link_only_mode else original_message,
                         "language": language,
                         "_single_url_only": True,
                         "_skip_ai_model_intent": True,
                         "_skip_ai_summary": True,
+                        "_link_only_mode": link_only_mode,
                     },
                 )
             if not resp.is_json:
@@ -2689,7 +2692,7 @@ def analyze():
             result["selected_message_url"] = selected.get("submitted_url", "")
             result["selected_message_url_index"] = selected.get("index", 0)
             result["ai_model_summary"] = build_ai_model_summary(
-                message=message,
+                message="" if link_only_mode else original_message,
                 submitted_url=result.get("submitted_url", "") or "",
                 analyzed_url=result.get("analyzed_url", "") or "",
                 language=language,
@@ -2701,7 +2704,7 @@ def analyze():
             if not payload.get("_skip_scan_log"):
                 append_scan_event_to_file(
                     url_field=raw_url,
-                    message_field=message,
+                    message_field=original_message,
                     language=language,
                     user_agent=(request.headers.get("User-Agent") or "")[:2000],
                     client_ip=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200],
@@ -2710,7 +2713,10 @@ def analyze():
                 )
             return jsonify(result)
 
-    extracted_url = extract_first_url(message)
+    if link_only_mode:
+        message = ""
+
+    extracted_url = message_urls[0] if message_urls else extract_first_url(original_message)
     submitted_url = raw_url or extracted_url
     normalized_submitted = normalize_url_for_checks(submitted_url)
     submitted_is_http = normalized_submitted.lower().startswith("http://") if normalized_submitted else False
@@ -3173,7 +3179,7 @@ def analyze():
     if not payload.get("_skip_scan_log") and not payload.get("_single_url_only"):
         append_scan_event_to_file(
             url_field=raw_url,
-            message_field=message,
+            message_field=original_message,
             language=language,
             user_agent=(request.headers.get("User-Agent") or "")[:2000],
             client_ip=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200],

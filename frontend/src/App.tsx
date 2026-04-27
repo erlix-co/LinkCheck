@@ -90,6 +90,7 @@ type ScanPayload = {
   url: string;
   message: string;
   language: Language;
+  _link_only_mode?: boolean;
 };
 
 /* ═══════════════════════════════════════
@@ -105,8 +106,11 @@ const translations = {
     messageLabel: "Message text",
     messagePlaceholder: "Paste the SMS or email you received here...",
     urlLabel: "Or just the link",
-    urlPlaceholder: "https://example.com",
+    urlPlaceholder: "Enter the link here, for example: http://example.com",
     scan: "Scan Now",
+    scanLinkOnly: "Link-only check",
+    scanLinkOnlyHelp:
+      "When checking a full message with a link, the verdict also includes message-text context. In link-only mode, only the link(s) are analyzed, so the verdict can differ. Click here for link-only analysis.",
     scanning: "Scanning...",
     scanHint: "",
     needInput: "Please enter a link or paste a message.",
@@ -201,8 +205,11 @@ const translations = {
     messageLabel: "טקסט ההודעה",
     messagePlaceholder: "הדבק כאן את ההודעה שקיבלת...",
     urlLabel: "או רק את הקישור",
-    urlPlaceholder: "https://example.com",
+    urlPlaceholder: "הזן כאן את הקישור, לדוגמה: http://example.com",
     scan: "בדיקה",
+    scanLinkOnly: "בדיקת קישור בלבד",
+    scanLinkOnlyHelp:
+      "בבדיקת הודעה עם קישור התוצאה משקללת את תוכן ההודעה, בבדיקת הקישור בלבד התוצאה יכולה להיות שונה. לבדיקת הקישור בלבד הקש כאן.",
     scanning: "בודק...",
     scanHint: "",
     needInput: "יש להזין קישור או הודעה.",
@@ -834,9 +841,10 @@ export function App() {
     return "\u{1F50D}";
   };
 
-  const onAnalyze = async () => {
+  const onAnalyze = async (mode: "full" | "link_only" = "full") => {
     const trimmed = url.trim();
     const trimmedMessage = message.trim();
+    const linkOnlyMode = mode === "link_only";
     pollTokenRef.current += 1;
     const runToken = pollTokenRef.current;
     const clearForceDisplayTimer = () => {
@@ -854,7 +862,14 @@ export function App() {
     setPendingIntelInProgress(false);
     setPendingIntelNotice("");
     setHardDisplayReady(false);
-    setLastScanPayload({ url: trimmed, message: trimmedMessage, language });
+    const makeScanPayload = (skipScanLog = false): ScanPayload & { _skip_scan_log?: boolean } => ({
+      url: trimmed,
+      message: trimmedMessage,
+      language,
+      ...(linkOnlyMode ? { _link_only_mode: true } : {}),
+      ...(skipScanLog ? { _skip_scan_log: true } : {}),
+    });
+    setLastScanPayload(makeScanPayload(false));
 
     if (!termsAccepted) {
       setError(t.termsRequired);
@@ -877,7 +892,7 @@ export function App() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language, _skip_scan_log: true }),
+          body: JSON.stringify(makeScanPayload(true)),
         },
         FINAL_ANALYZE_TIMEOUT_MS
       );
@@ -923,7 +938,7 @@ export function App() {
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+              body: JSON.stringify(makeScanPayload(false)),
             },
             LIVE_START_TIMEOUT_MS
           );
@@ -1107,7 +1122,7 @@ export function App() {
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ url: trimmed, message: trimmedMessage, language, _skip_scan_log: true }),
+                  body: JSON.stringify(makeScanPayload(true)),
                 },
                 FINAL_ANALYZE_TIMEOUT_MS
               );
@@ -1210,7 +1225,7 @@ export function App() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: trimmed, message: trimmedMessage, language }),
+          body: JSON.stringify(makeScanPayload(false)),
         },
         FINAL_ANALYZE_TIMEOUT_MS
       );
@@ -1255,7 +1270,7 @@ export function App() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey && !loading) {
       e.preventDefault();
-      onAnalyze();
+      onAnalyze("full");
     }
   };
 
@@ -1426,7 +1441,17 @@ export function App() {
           />
         </div>
 
-        <button type="button" className="scan-btn" onClick={onAnalyze} disabled={loading || !termsAccepted}>
+        <div className="scan-link-only-wrap">
+          <button type="button" className="scan-link-only-btn" onClick={() => onAnalyze("link_only")} disabled={loading || !termsAccepted}>
+            {t.scanLinkOnly}
+          </button>
+          <span className="scan-link-only-help" tabIndex={0} aria-label={t.scanLinkOnlyHelp}>?</span>
+          <div className="scan-link-only-help__tooltip" role="note">
+            {t.scanLinkOnlyHelp}
+          </div>
+        </div>
+
+        <button type="button" className="scan-btn" onClick={() => onAnalyze("full")} disabled={loading || !termsAccepted}>
           <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
           {loading ? t.scanning : t.scan}
         </button>
