@@ -132,6 +132,7 @@ GEMINI_MODEL_CANDIDATES = [
 ]
 GEMINI_RETRY_ATTEMPTS = max(1, int(os.getenv("GEMINI_RETRY_ATTEMPTS", "2")))
 GEMINI_RETRY_DELAY_SEC = max(0.0, float(os.getenv("GEMINI_RETRY_DELAY_SEC", "0.35")))
+GEMINI_TOTAL_BUDGET_SEC = max(2.0, float(os.getenv("GEMINI_TOTAL_BUDGET_SEC", "8.0")))
 
 
 def _extract_gemini_text(body: dict, default: str = "") -> str:
@@ -162,25 +163,35 @@ def _gemini_generate_text(
         payload["generationConfig"]["responseMimeType"] = response_mime_type
 
     retryable_codes = {429, 500, 502, 503, 504}
+    deadline = time.monotonic() + GEMINI_TOTAL_BUDGET_SEC
     for model_name in GEMINI_MODEL_CANDIDATES:
+        if time.monotonic() >= deadline:
+            break
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         for attempt in range(GEMINI_RETRY_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return ""
             try:
                 resp = requests.post(
                     f"{endpoint}?key={gemini_api_key}",
                     json=payload,
-                    timeout=timeout_sec,
+                    timeout=max(1.0, min(float(timeout_sec), remaining)),
                 )
                 if resp.ok:
                     return _extract_gemini_text(resp.json(), default="")
                 if resp.status_code in retryable_codes and attempt < GEMINI_RETRY_ATTEMPTS - 1:
-                    time.sleep(GEMINI_RETRY_DELAY_SEC * (attempt + 1))
+                    sleep_for = min(GEMINI_RETRY_DELAY_SEC * (attempt + 1), max(0.0, deadline - time.monotonic()))
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
                     continue
                 # Non-retryable (or retries exhausted): move to next fallback model.
                 break
             except requests.RequestException:
                 if attempt < GEMINI_RETRY_ATTEMPTS - 1:
-                    time.sleep(GEMINI_RETRY_DELAY_SEC * (attempt + 1))
+                    sleep_for = min(GEMINI_RETRY_DELAY_SEC * (attempt + 1), max(0.0, deadline - time.monotonic()))
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
                     continue
                 break
     return ""
@@ -896,6 +907,13 @@ def _strip_leading_www(hostname: str) -> str:
     if host.startswith("www."):
         return host[4:]
     return host
+
+
+def _is_known_shortener_host(hostname: str) -> bool:
+    host = _strip_leading_www((hostname or "").lower())
+    if not host:
+        return False
+    return any(host == d or host.endswith(f".{d}") for d in SHORTENER_DOMAINS)
 
 
 def brand_key_for_canonical_domain(domain: str) -> str:
@@ -2409,10 +2427,15 @@ def _build_stage1_snapshot(submitted_url: str, language: str) -> tuple[str, list
     url_score, url_reasons, ctx = analyze_url(submitted_url)
     parsed = urlparse(submitted_url if "://" in submitted_url else f"https://{submitted_url}")
     hostname = (parsed.hostname or "").lower()
+    if _is_known_shortener_host(hostname) and "suspicious_tld" in url_reasons:
+        # Shorteners often use non-IL ccTLDs; avoid misleading early-stage "foreign TLD" alarm
+        # before redirect expansion reveals the actual destination domain.
+        url_reasons = [k for k in url_reasons if k != "suspicious_tld"]
+        url_score = max(0, int(url_score) - 20)
     tld, tld_country_code = _country_from_tld(hostname)
     if tld and not ctx.get("domain_tld"):
         ctx["domain_tld"] = tld
-    if tld_country_code and not ctx.get("tld_country_code"):
+    if tld_country_code and not ctx.get("tld_country_code") and not _is_known_shortener_host(hostname):
         ctx["tld_country_code"] = tld_country_code
     tls_ok = tls_certificate_valid(hostname) if hostname else False
     if hostname and not tls_ok and any(k in url_reasons for k in ("brand_mismatch", "suspicious_tld", "lookalike_brand")):
@@ -2894,7 +2917,7 @@ def analyze():
         url_context["domain_tld"] = tld
     if tld_country_code and not url_context.get("tld_country_code"):
         url_context["tld_country_code"] = tld_country_code
-    if language == "he" and tld_country_code and tld_country_code != "IL":
+    if language == "he" and tld_country_code and tld_country_code != "IL" and not _is_known_shortener_host(hostname):
         if "tld_country_notice" not in reason_keys:
             reason_keys.append("tld_country_notice")
     registrable_domain = get_registrable_domain(hostname) if hostname else ""
