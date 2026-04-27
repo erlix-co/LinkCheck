@@ -419,6 +419,59 @@ const reasonI18n = {
   }
 } as const;
 
+const seoContent = {
+  en: {
+    title: "Check suspicious links and phishing messages in seconds",
+    intro:
+      "LinkCheck helps you evaluate suspicious URLs and message text in real time. The system combines local heuristics, redirect analysis, and external threat checks to reduce phishing risk before you click.",
+    points: [
+      "Paste a full message from SMS, WhatsApp, or email and detect risky links automatically.",
+      "Follow short links to their real destination before making a safety decision.",
+      "Get a clear final verdict after live checks from multiple external sources.",
+    ],
+    faqTitle: "Frequently asked questions",
+    faqs: [
+      {
+        q: "Can LinkCheck detect phishing in Hebrew messages?",
+        a: "Yes. LinkCheck includes Hebrew-aware signals and combines message intent with technical URL checks.",
+      },
+      {
+        q: "Does LinkCheck analyze short links like bit.ly?",
+        a: "Yes. The scanner expands short links and evaluates the final destination domain before returning the final result.",
+      },
+      {
+        q: "Is the result shown immediately final?",
+        a: "Not always. You may first see a temporary result while external checks finish, then a final verdict.",
+      },
+    ],
+  },
+  he: {
+    title: "בדיקת קישורים חשודים והודעות פישינג תוך שניות",
+    intro:
+      "LinkCheck מסייע לבדוק קישורים חשודים וטקסטים של הודעות בזמן אמת. המערכת משלבת בדיקות מקומיות, ניתוח הפניות, ובדיקות איומים חיצוניות כדי לצמצם סיכון לפישינג לפני לחיצה.",
+    points: [
+      "הדבקת הודעה מלאה מ-SMS, וואטסאפ או אימייל, עם זיהוי אוטומטי של קישורים מסוכנים.",
+      "פתיחת קישורים מקוצרים ליעד האמיתי לפני קבלת החלטת בטיחות.",
+      "קבלת תוצאה סופית וברורה לאחר השלמת בדיקות חיצוניות ממספר מקורות.",
+    ],
+    faqTitle: "שאלות נפוצות",
+    faqs: [
+      {
+        q: "האם LinkCheck יודע לזהות פישינג גם בהודעות בעברית?",
+        a: "כן. LinkCheck כולל אותות מותאמים לעברית ומשלב בין ניתוח תוכן ההודעה לבדיקות טכניות של הקישור.",
+      },
+      {
+        q: "האם LinkCheck בודק גם קישורים מקוצרים כמו bit.ly?",
+        a: "כן. הסורק מרחיב קישורים מקוצרים ובודק את דומיין היעד הסופי לפני החזרת תוצאה סופית.",
+      },
+      {
+        q: "האם התוצאה שמוצגת מיד היא תמיד סופית?",
+        a: "לא תמיד. לעיתים מוצגת תחילה תוצאה זמנית בזמן שבדיקות חיצוניות מסתיימות, ולאחר מכן תוצאה סופית.",
+      },
+    ],
+  },
+} as const;
+
 /* ═══════════════════════════════════════
    I18N — GREEN CHECK LABELS
    ═══════════════════════════════════════ */
@@ -506,6 +559,7 @@ export function App() {
   const autoIntelExhaustedTokenRef = useRef<number>(-1);
   const forceDisplayTimerRef = useRef<number | null>(null);
   const t = translations[language];
+  const seo = seoContent[language];
 
   useEffect(() => {
     if (!liveMeta || countdownSec <= 0) return;
@@ -599,6 +653,31 @@ export function App() {
       cancelled = true;
     };
   }, [result, loading, liveMeta, lastScanPayload, pendingIntelInProgress, t]);
+
+  useEffect(() => {
+    const scriptId = "linkcheck-faq-jsonld";
+    const existing = document.getElementById(scriptId);
+    if (existing) existing.remove();
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.type = "application/ld+json";
+    script.text = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: seo.faqs.map((item) => ({
+        "@type": "Question",
+        name: item.q,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: item.a,
+        },
+      })),
+    });
+    document.head.appendChild(script);
+    return () => {
+      script.remove();
+    };
+  }, [seo]);
 
   const riskVariant = (level: RiskLevel) =>
     level === "Low" ? "safe" : level === "Medium" ? "warn" : "danger";
@@ -1611,6 +1690,26 @@ export function App() {
             {result.intel_note && <div className="intel-note">{result.intel_note}</div>}
           </div>
         )}
+      </section>
+
+      <section className="seo-content" aria-label={seo.title}>
+        <h2>{seo.title}</h2>
+        <p>{seo.intro}</p>
+        <ul className="seo-content__list">
+          {seo.points.map((point) => (
+            <li key={point}>{point}</li>
+          ))}
+        </ul>
+
+        <h3>{seo.faqTitle}</h3>
+        <div className="seo-faq">
+          {seo.faqs.map((item) => (
+            <details key={item.q} className="seo-faq__item">
+              <summary>{item.q}</summary>
+              <p>{item.a}</p>
+            </details>
+          ))}
+        </div>
       </section>
 
       <div className="beta-banner beta-banner--footer" role="status">
