@@ -4,6 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LinkCheck by Erlix</title>
+    <meta
+      name="description"
+      content="LinkCheck by Erlix - בדיקת הודעות וקישורים חשודים בעברית ובאנגלית עם ניתוח בזמן אמת, זיהוי פישינג, ובדיקות בטיחות חיצוניות."
+    />
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow" />
+    <link rel="canonical" href="https://erlix.net/linkcheck/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://erlix.net/linkcheck/" />
+    <meta property="og:title" content="LinkCheck by Erlix" />
+    <meta
+      property="og:description"
+      content="כלי חינמי לבדיקת הודעות וקישורים חשודים, עם ניתוח סיכונים בזמן אמת."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="LinkCheck by Erlix" />
+    <meta
+      name="twitter:description"
+      content="בדיקת הודעות וקישורים חשודים עם זיהוי פישינג ובדיקות בטיחות חיצוניות."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -14,9 +34,46 @@
     />
     <noscript>
       <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Rubik:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+      <style>
+        .seo-noscript {
+          max-width: 880px;
+          margin: 24px auto;
+          padding: 16px;
+          border: 1px solid #cbd5e1;
+          border-radius: 12px;
+          font-family: Rubik, Arial, sans-serif;
+          line-height: 1.6;
+          direction: rtl;
+        }
+      </style>
     </noscript>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "LinkCheck by Erlix",
+        "url": "https://erlix.net/linkcheck/",
+        "applicationCategory": "SecurityApplication",
+        "operatingSystem": "Web",
+        "inLanguage": ["he", "en"],
+        "description": "כלי מקוון לבדיקת הודעות וקישורים חשודים עם ניתוח סיכונים בזמן אמת."
+      }
+    </script>
   </head>
   <body>
+    <noscript>
+      <section class="seo-noscript">
+        <h1>LinkCheck - בדיקת קישורים והודעות חשודות</h1>
+        <p>
+          LinkCheck הוא כלי של Erlix לבדיקת הודעות וקישורים חשודים, עם ניתוח סיכונים בזמן אמת,
+          זיהוי סימני פישינג ובדיקות בטיחות חיצוניות.
+        </p>
+        <p>
+          עמוד הכלי:
+          <a href="https://erlix.net/linkcheck/">https://erlix.net/linkcheck/</a>
+        </p>
+      </section>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
