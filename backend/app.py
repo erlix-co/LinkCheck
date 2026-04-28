@@ -199,7 +199,7 @@ def _gemini_generate_text(
 # Input size caps for /analyze (DoS / abuse mitigation).
 MAX_ANALYZE_URL_LEN = int(os.getenv("MAX_ANALYZE_URL_LEN", "4096"))
 MAX_ANALYZE_MESSAGE_LEN = int(os.getenv("MAX_ANALYZE_MESSAGE_LEN", "100000"))
-MAX_MESSAGE_URLS_TO_ANALYZE = max(1, int(os.getenv("MAX_MESSAGE_URLS_TO_ANALYZE", "5")))
+MAX_MESSAGE_URLS_TO_ANALYZE = 2
 
 # Use bundled PSL snapshot for stable, offline-safe registrable extraction.
 psl_extract = tldextract.TLDExtract(suffix_list_urls=None)
@@ -296,13 +296,18 @@ TRUSTED_ROOT_DOMAINS = {
 SHORTENER_DOMAINS = (
     "bit.ly",
     "tinyurl.com",
+    "tiny.cc",
+    "t.me",
     "t.co",
     "rb.gy",
     "ow.ly",
     "cutt.ly",
     "is.gd",
+    "soo.gd",
     "buff.ly",
     "rebrand.ly",
+    "snip.ly",
+    "lnkd.in",
     "shorturl.at",
     "shorten.as",
     "did.li",
@@ -508,6 +513,7 @@ I18N = {
         "tld_country_notice": "Domain suffix points to a specific country.",
         "single_page_site": "Website appears to have only a single active page (very limited internal structure).",
         "need_input": "Please enter a URL or full message text.",
+        "too_many_links": "Up to two links can be checked in one scan. Please check additional links separately.",
         "no_major_signals": "No strong phishing signs were found.",
         "safe_now": "No warning signs were found in this check.",
         "insufficient_trust_signals": "Not enough trust signals for a green/safe result.",
@@ -582,6 +588,7 @@ I18N = {
         "tld_country_notice": "סיומת הדומיין מצביעה על מדינה מסוימת.",
         "single_page_site": "נראה שלאתר יש דף פעיל יחיד בלבד (מבנה פנימי דל מאוד).",
         "need_input": "יש להזין קישור או טקסט הודעה מלא.",
+        "too_many_links": "ניתן לבדוק עד שני קישורים בבדיקה אחת. את הקישורים הנוספים יש לבדוק בבדיקה נפרדת.",
         "no_major_signals": "לא נמצאו סימני פישינג חזקים.",
         "safe_now": "בבדיקה הזו לא נמצאו סימני אזהרה.",
         "insufficient_trust_signals": "אין מספיק אותות אמון כדי לתת מצב ירוק/בטוח.",
@@ -1672,6 +1679,58 @@ def build_ai_model_summary(
     return str(text or "").strip()
 
 
+def build_ai_summary_fallback(
+    *,
+    language: str,
+    analyzed_url: str,
+    reason_keys: list[str],
+    domain_verdict: dict,
+    tld_country_code: str,
+) -> str:
+    """Deterministic fallback when AI summary generation is temporarily empty."""
+    keys = set(reason_keys or [])
+    has_social = "ai_model_social_engineering" in keys or "ai_social_engineering" in keys
+    has_impersonation = "ai_model_impersonation" in keys or "ai_authority_impersonation" in keys
+    has_sensitive = "ai_model_sensitive_action" in keys or "ai_sensitive_request" in keys
+    country_mismatch = bool(tld_country_code and tld_country_code != "IL")
+    domain_risk = str((domain_verdict or {}).get("risk_level", "")).strip()
+
+    if language == "he":
+        lines: list[str] = []
+        if has_social:
+            lines.append("בהודעה זוהה ניסוח של לחץ או דחיפות, שמאפיין לעיתים ניסיונות הונאה.")
+        if has_impersonation:
+            lines.append("נמצאו סימנים שמצביעים על התחזות לגורם מוכר או רשמי.")
+        if has_sensitive:
+            lines.append("זוהתה בקשה לפעולה רגישה מצד המשתמש, ולכן נדרשת זהירות.")
+        if country_mismatch:
+            lines.append("קיים פער בין ההקשר הישראלי של ההודעה לבין רישום הדומיין מחוץ לישראל.")
+        if domain_risk and domain_risk != "Low":
+            lines.append("גם רמת הסיכון של הדומיין הראשי אינה נמוכה, ולכן לא מומלץ ללחוץ על הקישור.")
+        if not lines:
+            lines.append("נמצאו סימנים מחשידים בהודעה ביחס לקישור, ולכן מומלץ להימנע מלחיצה ולוודא את המקור.")
+        if analyzed_url:
+            lines.append(f"קישור שנבדק: {analyzed_url}")
+        return " ".join(lines)
+
+    lines_en: list[str] = []
+    if has_social:
+        lines_en.append("The message uses pressure or urgency language, which is common in scams.")
+    if has_impersonation:
+        lines_en.append("There are signs of possible impersonation of a trusted or official entity.")
+    if has_sensitive:
+        lines_en.append("A sensitive action is requested from the user, so extra caution is required.")
+    if country_mismatch:
+        lines_en.append("There is a mismatch between the Israeli message context and a non-Israeli domain registration.")
+    if domain_risk and domain_risk != "Low":
+        lines_en.append("The main domain risk is not low, so clicking this link is not recommended.")
+    if not lines_en:
+        lines_en.append("Suspicious message-to-link signals were found; avoid clicking and verify the source first.")
+    if analyzed_url:
+        lines_en.append(f"Checked link: {analyzed_url}")
+    return " ".join(lines_en)
+
+
 def external_intel_status(url: str) -> tuple[str, list[str]]:
     if not url:
         return "", []
@@ -2199,7 +2258,7 @@ def analyze_page_language_signals(url: str) -> tuple[int, list[str], dict]:
     context["page_audience"] = audience
     if tld:
         context["domain_tld"] = tld
-    if tld_country_code:
+    if tld_country_code and not _is_known_shortener_host(hostname):
         context["tld_country_code"] = tld_country_code
 
     if dominant_hebrew:
@@ -2649,6 +2708,16 @@ def analyze():
 
     # If user provided full message, extract URL automatically.
     message_urls = extract_urls(original_message)
+    if len(message_urls) > MAX_MESSAGE_URLS_TO_ANALYZE and not payload.get("_single_url_only"):
+        return jsonify(
+            {
+                "ok": False,
+                "error": "too_many_links",
+                "score": 0,
+                "risk_level": "Low",
+                "reasons": [t(language, "too_many_links")],
+            }
+        ), 400
     if not raw_url and len(message_urls) > 1 and not payload.get("_single_url_only"):
         analyzed_links: list[dict] = []
         for idx, link in enumerate(message_urls[:MAX_MESSAGE_URLS_TO_ANALYZE]):
@@ -2936,7 +3005,7 @@ def analyze():
     tld, tld_country_code = _country_from_tld(hostname)
     if tld and not url_context.get("domain_tld"):
         url_context["domain_tld"] = tld
-    if tld_country_code and not url_context.get("tld_country_code"):
+    if tld_country_code and not url_context.get("tld_country_code") and not _is_known_shortener_host(hostname):
         url_context["tld_country_code"] = tld_country_code
     if language == "he" and tld_country_code and tld_country_code != "IL" and not _is_known_shortener_host(hostname):
         if "tld_country_notice" not in reason_keys:
@@ -3002,6 +3071,7 @@ def analyze():
     if age_days is not None:
         age_status = "pass" if age_days >= 180 else "fail"
 
+    https_gate_ok = final_is_https and tls_ok
     green_checks = [
         {"key": "no_local_warnings", "status": "pass" if no_url_warnings else "fail"},
         {
@@ -3012,7 +3082,7 @@ def analyze():
         {"key": "urlscan_clean", "status": ("pass" if urlscan_clean else "fail") if urlscan_checked else "na"},
         {"key": "gsb_clean", "status": ("pass" if gsb_clean else "fail") if gsb_checked else "na"},
         {"key": "dns_resolves", "status": "pass" if dns_ok else "fail"},
-        {"key": "tls_valid", "status": "pass" if tls_ok else "fail"},
+        {"key": "tls_valid", "status": "pass" if https_gate_ok else "fail"},
         {"key": "page_available", "status": page_status, "value": page_status_code},
         {"key": "domain_age_180d", "status": age_status, "value": age_days},
     ]
@@ -3034,7 +3104,7 @@ def analyze():
         and urlscan_passes
         and gsb_passes
         and dns_ok
-        and tls_ok
+        and https_gate_ok
         and page_passes
     )
     if was_short_link:
@@ -3081,7 +3151,12 @@ def analyze():
     }
     force_low_for_weak_only = False
     effective_keys = {k for k in reason_keys if k not in {"insufficient_trust_signals"}}
-    if effective_keys and effective_keys.issubset(weak_only_keys) and not any(k in reason_keys for k in hard_risk_keys):
+    if (
+        effective_keys
+        and effective_keys.issubset(weak_only_keys)
+        and not any(k in reason_keys for k in hard_risk_keys)
+        and https_gate_ok
+    ):
         # Weak/ambiguous signals alone should not force medium-risk banners.
         total_score = min(total_score, 20)
         reason_keys = [k for k in reason_keys if k != "insufficient_trust_signals"]
@@ -3160,6 +3235,24 @@ def analyze():
             domain_verdict=domain_verdict,
             tld_country_code=url_context.get("tld_country_code", ""),
         )
+        if not model_intent_summary and any(
+            k in reason_keys
+            for k in (
+                "ai_model_social_engineering",
+                "ai_model_impersonation",
+                "ai_model_sensitive_action",
+                "ai_social_engineering",
+                "ai_authority_impersonation",
+                "ai_sensitive_request",
+            )
+        ):
+            model_intent_summary = build_ai_summary_fallback(
+                language=language,
+                analyzed_url=url_to_check or "",
+                reason_keys=reason_keys,
+                domain_verdict=domain_verdict,
+                tld_country_code=url_context.get("tld_country_code", ""),
+            )
 
     response_payload = {
             "score": total_score,
@@ -3212,6 +3305,15 @@ def analyze_live_start():
     message = (payload.get("message", "") or "").strip()
     link_only_mode = bool(payload.get("_link_only_mode"))
     force_live_fresh = bool(payload.get("_force_live_fresh"))
+    message_urls = extract_urls(message)
+    if len(message_urls) > MAX_MESSAGE_URLS_TO_ANALYZE:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "too_many_links",
+                "reasons": [t(language, "too_many_links")],
+            }
+        ), 400
     scan_user_agent = (request.headers.get("User-Agent") or "")[:2000]
     scan_client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")[:200]
     if len(raw_url) > MAX_ANALYZE_URL_LEN or len(message) > MAX_ANALYZE_MESSAGE_LEN:

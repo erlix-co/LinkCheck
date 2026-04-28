@@ -104,14 +104,15 @@ const translations = {
     betaBadge: "Beta",
     betaNotice:
       "Experimental version — results are estimates only and are not guaranteed. Do not rely on this tool as your only protection.",
-    messageLabel: "Message text",
-    messagePlaceholder: "Paste the SMS or email you received here...",
-    urlLabel: "Or just the link",
-    urlPlaceholder: "Enter the link here, for example: http://example.com",
-    scan: "Scan Now",
+    messageLabel: "Message text or link",
+    messagePlaceholder: "Paste the message you received, or the link itself...",
+    scan: "Full scan",
     scanLinkOnly: "Link-only check",
     scanLinkOnlyHelp:
       "When checking a full message with a link, the verdict also includes message-text context. In link-only mode, only the link(s) are analyzed, so the verdict can differ. Click here for link-only analysis.",
+    maxTwoLinks: "You can check up to two links per scan. Please check additional links in a separate scan.",
+    fullScanVsLinkOnlyNotice:
+      "When a scanned message contains links, the result also includes message-text context. In link-only mode the verdict can differ. For link-only analysis, click the Link-only check button.",
     scanning: "Scanning...",
     scanHint: "",
     needInput: "Please enter a link or paste a message.",
@@ -203,14 +204,15 @@ const translations = {
     betaBadge: "גרסת ניסוי",
     betaNotice:
       "גרסת ניסוי — התוצאות הן הערכה בלבד ואינן מובטחות. אל תסתמך על הכלי כהגנה יחידה.",
-    messageLabel: "טקסט ההודעה",
-    messagePlaceholder: "הדבק כאן את ההודעה שקיבלת...",
-    urlLabel: "או רק את הקישור",
-    urlPlaceholder: "הזן כאן את הקישור, לדוגמה: http://example.com",
-    scan: "בדיקה",
+    messageLabel: "טקסט ההודעה או הקישור",
+    messagePlaceholder: "הדבק כאן את ההודעה שקיבלת, או את הקישור...",
+    scan: "בדיקה מלאה",
     scanLinkOnly: "בדיקת קישור בלבד",
     scanLinkOnlyHelp:
       "בבדיקת הודעה עם קישור התוצאה משקללת את תוכן ההודעה, בבדיקת הקישור בלבד התוצאה יכולה להיות שונה. לבדיקת הקישור בלבד הקש כאן.",
+    maxTwoLinks: "ניתן לבדוק עד שני קישורים בבדיקה אחת. את הקישורים הנוספים יש לבדוק בבדיקה נפרדת.",
+    fullScanVsLinkOnlyNotice:
+      "בבדיקת הודעה המכילה קישורים התוצאה משקללת את תוכן ההודעה, בבדיקת הקישור בלבד התוצאה יכולה להיות שונה. לבדיקת הקישור בלבד הקש על לחצן בדיקת קישור בלבד.",
     scanning: "בודק...",
     scanHint: "",
     needInput: "יש להזין קישור או הודעה.",
@@ -511,7 +513,17 @@ const checkLabels: Record<string, Record<Language, string>> = {
    HELPERS
    ═══════════════════════════════════════ */
 
-const urlRegex = /^(https?:\/\/)?([^\s/$.?#].[^\s]*)$/i;
+const inputUrlRegex = /\bhttps?:\/\/[^\s<>"']+|\bwww\.[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/gi;
+const extractInputUrls = (text: string): string[] => {
+  const matches = text.match(inputUrlRegex) || [];
+  const normalized = matches.map((m) => m.trim()).filter(Boolean);
+  return Array.from(new Set(normalized));
+};
+const hasNonUrlText = (text: string): boolean => {
+  const withoutUrls = text.replace(inputUrlRegex, " ");
+  const normalized = withoutUrls.replace(/[^\p{L}\p{N}]+/gu, "").trim();
+  return normalized.length > 0;
+};
 const detectedLanguage: Language = navigator.language.toLowerCase().startsWith("en") ? "en" : "he";
 const defaultApiBaseUrl =
   typeof window !== "undefined"
@@ -557,7 +569,6 @@ async function fetchWithTimeout(
 export function App() {
   const [language, setLanguage] = useState<Language>(detectedLanguage);
   const [message, setMessage] = useState("");
-  const [url, setUrl] = useState("");
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [liveMeta, setLiveMeta] = useState<LiveMeta | null>(null);
   const [countdownSec, setCountdownSec] = useState(LIVE_COUNTDOWN_SECONDS);
@@ -570,6 +581,7 @@ export function App() {
   const [pendingIntelNotice, setPendingIntelNotice] = useState("");
   const [pendingIntelInProgress, setPendingIntelInProgress] = useState(false);
   const [hardDisplayReady, setHardDisplayReady] = useState(false);
+  const [showFullScanNotice, setShowFullScanNotice] = useState(false);
   const pollTokenRef = useRef(0);
   const autoIntelRunRef = useRef(0);
   const autoIntelExhaustedTokenRef = useRef<number>(-1);
@@ -843,9 +855,10 @@ export function App() {
   };
 
   const onAnalyze = async (mode: "full" | "link_only" = "full") => {
-    const trimmed = url.trim();
     const trimmedMessage = message.trim();
-    const linkOnlyMode = mode === "link_only";
+    const extractedUrls = extractInputUrls(trimmedMessage);
+    const onlyLinksInput = extractedUrls.length > 0 && !hasNonUrlText(trimmedMessage);
+    const linkOnlyMode = mode === "link_only" || onlyLinksInput;
     pollTokenRef.current += 1;
     const runToken = pollTokenRef.current;
     const clearForceDisplayTimer = () => {
@@ -863,8 +876,9 @@ export function App() {
     setPendingIntelInProgress(false);
     setPendingIntelNotice("");
     setHardDisplayReady(false);
+    setShowFullScanNotice(false);
     const makeScanPayload = (skipScanLog = false): ScanPayload & { _skip_scan_log?: boolean } => ({
-      url: trimmed,
+      url: "",
       message: trimmedMessage,
       language,
       ...(linkOnlyMode ? { _link_only_mode: true } : {}),
@@ -878,15 +892,20 @@ export function App() {
       return;
     }
 
-    if (!trimmed && !trimmedMessage) {
+    if (!trimmedMessage) {
       setError(t.needInput);
       return;
     }
 
-    if (trimmed && !urlRegex.test(trimmed)) {
+    if (extractedUrls.length === 0) {
       setError(t.invalidUrl);
       return;
     }
+    if (extractedUrls.length > 2) {
+      setError(t.maxTwoLinks);
+      return;
+    }
+    setShowFullScanNotice(mode === "full" && !linkOnlyMode);
 
     const fetchAuthoritativeFinal = async (): Promise<AnalysisResponse | null> => {
       const finalResp = await fetchWithTimeout(
@@ -1346,7 +1365,7 @@ export function App() {
         open={showReportModal}
         onClose={() => setShowReportModal(false)}
         lang={language}
-        url={url}
+        url=""
         message={message}
         apiBaseUrl={apiBaseUrl}
         labels={{
@@ -1429,34 +1448,16 @@ export function App() {
           />
         </div>
 
-        <div className="form-group">
-          <label className="form-label" htmlFor="link">{t.urlLabel}</label>
-          <input
-            id="link"
-            className="form-input"
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={t.urlPlaceholder}
-            dir="ltr"
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-
-        <div className="scan-link-only-wrap">
-          <button type="button" className="scan-link-only-btn" onClick={() => onAnalyze("link_only")} disabled={loading || !termsAccepted}>
-            {t.scanLinkOnly}
-          </button>
-          <span className="scan-link-only-help" tabIndex={0} aria-label={t.scanLinkOnlyHelp}>?</span>
-          <div className="scan-link-only-help__tooltip" role="note">
-            {t.scanLinkOnlyHelp}
-          </div>
-        </div>
-
         <button type="button" className="scan-btn" onClick={() => onAnalyze("full")} disabled={loading || !termsAccepted}>
           <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
           {loading ? t.scanning : t.scan}
         </button>
+        <div className="scan-link-only-wrap">
+          <button type="button" className="scan-btn scan-link-only-btn" onClick={() => onAnalyze("link_only")} disabled={loading || !termsAccepted}>
+            <span className="scan-btn__icon">{loading ? "" : "\u{1F6E1}\uFE0F"}</span>
+            {t.scanLinkOnly}
+          </button>
+        </div>
         {t.scanHint ? <p className="scan-hint">{t.scanHint}</p> : null}
 
         <TermsInline
@@ -1510,6 +1511,14 @@ export function App() {
             <div className="reason-item reason-item--ai-summary">
               <span className="reason-item__icon">ℹ️</span>
               <span>{t.provisionalResultNotice}</span>
+            </div>
+          </div>
+        )}
+        {showFinalVerdict && result && !loading && showFullScanNotice && (
+          <div className="result-section">
+            <div className="reason-item reason-item--ai-summary">
+              <span className="reason-item__icon">ℹ️</span>
+              <span>{t.fullScanVsLinkOnlyNotice}</span>
             </div>
           </div>
         )}
