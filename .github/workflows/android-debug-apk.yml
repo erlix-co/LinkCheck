@@ -40,7 +40,7 @@ jobs:
           ls -la mobile
           npm run build:web --prefix mobile 2>&1 | tee mobile-build.log
           npm run sync --prefix mobile 2>&1 | tee -a mobile-build.log
-        working-directory: mobile
+        working-directory: .
 
       - name: Setup Java
         uses: actions/setup-java@v4

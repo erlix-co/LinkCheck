@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 const env = {
   ...process.env,
   VITE_API_BASE_URL: "https://erlix.net/api",
+  MOBILE: "true",
 };
 
 const hasFrontendReact = existsSync("../frontend/node_modules/react/package.json");
