@@ -29,7 +29,17 @@ jobs:
         working-directory: frontend
 
       - name: Build web and sync Android assets
-        run: npm run build:android
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "PWD=$(pwd)"
+          echo "Node=$(node -v)"
+          echo "NPM=$(npm -v)"
+          ls -la
+          ls -la frontend
+          ls -la mobile
+          npm run build:web --prefix mobile 2>&1 | tee mobile-build.log
+          npm run sync --prefix mobile 2>&1 | tee -a mobile-build.log
         working-directory: mobile
 
       - name: Setup Java
@@ -48,3 +58,11 @@ jobs:
           name: linkcheck-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Upload mobile build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-build-log
+          path: mobile-build.log
+          if-no-files-found: ignore
