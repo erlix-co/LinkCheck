@@ -21,11 +21,11 @@ jobs:
             mobile/package-lock.json
 
       - name: Install mobile dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
         working-directory: mobile
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
         working-directory: frontend
 
       - name: Build web and sync Android assets

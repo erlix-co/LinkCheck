@@ -9,7 +9,7 @@ const env = {
 const hasFrontendReact = existsSync("../frontend/node_modules/react/package.json");
 
 if (!hasFrontendReact) {
-  const installResult = spawnSync("npm", ["ci"], {
+  const installResult = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
     cwd: "../frontend",
     env,
     stdio: "inherit",
