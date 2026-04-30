@@ -28,6 +28,8 @@ npm run build
 
 rm -rf /var/www/linkcheck/*
 cp -r dist/* /var/www/linkcheck/
+cp /root/erlix/linkcheck/deploy/seo/robots.txt /var/www/html/robots.txt
+cp /root/erlix/linkcheck/deploy/seo/sitemap.xml /var/www/html/sitemap.xml
 
 systemctl reload nginx
 
