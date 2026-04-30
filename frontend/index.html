@@ -3,27 +3,46 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LinkCheck by Erlix</title>
+
+    <title>בדיקת קישור חשוד | LinkCheck — האם הלינק בטוח? | Erlix</title>
+
     <meta
       name="description"
-      content="LinkCheck by Erlix - בדיקת הודעות וקישורים חשודים בעברית ובאנגלית עם ניתוח בזמן אמת, זיהוי פישינג, ובדיקות בטיחות חיצוניות."
+      content="בדיקת קישור חשוד והודעות SMS פישינג בעברית — האם הלינק בטוח? LinkCheck של Erlix מנתח קישורים, פותח קישורים מקוצרים (כמו bit.ly), ומחזיר תוצאה ברורה תוך שניות."
     />
+    <meta name="keywords" content="בדיקת קישור, האם הקישור בטוח, פישינג, SMS חשוד, הודעת מתחזה לבנק, קישור מקוצר, bit.ly, בדיקת אתר, אבטחת מידע, LinkCheck, Erlix" />
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
     <meta name="googlebot" content="index, follow" />
+    <meta name="bingbot" content="index, follow" />
+
     <link rel="canonical" href="https://erlix.net/linkcheck/" />
+
+    <link rel="alternate" hreflang="he" href="https://erlix.net/linkcheck/" />
+    <link rel="alternate" hreflang="he-IL" href="https://erlix.net/linkcheck/" />
+    <link rel="alternate" hreflang="en" href="https://erlix.net/linkcheck/?lang=en" />
+    <link rel="alternate" hreflang="x-default" href="https://erlix.net/linkcheck/" />
+
     <meta property="og:type" content="website" />
+    <meta property="og:locale" content="he_IL" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:site_name" content="Erlix" />
     <meta property="og:url" content="https://erlix.net/linkcheck/" />
-    <meta property="og:title" content="LinkCheck by Erlix" />
+    <meta property="og:title" content="בדיקת קישור חשוד והודעות פישינג | LinkCheck" />
     <meta
       property="og:description"
-      content="כלי חינמי לבדיקת הודעות וקישורים חשודים, עם ניתוח סיכונים בזמן אמת."
+      content="הדביקו קישור או הודעה חשודה — תקבלו ניתוח בטיחות בזמן אמת: בדיקת פישינג, פתיחת קישורים מקוצרים ובדיקות מאגרי איומים עולמיים."
     />
+    <meta property="og:image" content="https://erlix.net/linkcheck/erlix-logo.png" />
+    <meta property="og:image:alt" content="LinkCheck by Erlix — בדיקת קישורים חשודים" />
+
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="LinkCheck by Erlix" />
+    <meta name="twitter:title" content="בדיקת קישור חשוד | LinkCheck" />
     <meta
       name="twitter:description"
-      content="בדיקת הודעות וקישורים חשודים עם זיהוי פישינג ובדיקות בטיחות חיצוניות."
+      content="האם הקישור בטוח? בדיקת קישורים והודעות SMS חשודות — תוצאה ברורה תוך שניות."
     />
+    <meta name="twitter:image" content="https://erlix.net/linkcheck/erlix-logo.png" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -32,62 +51,219 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Rubik:wght@300;400;500;600;700&display=swap"
       onload="this.onload=null;this.rel='stylesheet'"
     />
+
     <style>
       .seo-intro {
-        max-width: 880px;
-        margin: 32px auto;
-        padding: 20px 24px;
+        max-width: 980px;
+        margin: 28px auto 8px;
+        padding: 22px 26px 18px;
         border: 1px solid #d8dee9;
-        border-radius: 14px;
-        background: #fbfdff;
+        border-radius: 16px;
+        background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
         color: #1f2937;
         font-family: Rubik, Arial, sans-serif;
-        line-height: 1.7;
+        line-height: 1.75;
         direction: rtl;
         text-align: right;
       }
       .seo-intro h1 {
-        font-size: 1.6rem;
+        font-size: 1.7rem;
         margin: 0 0 12px;
         color: #0f172a;
+        line-height: 1.35;
       }
-      .seo-intro p {
-        margin: 0 0 10px;
-        font-size: 1rem;
+      .seo-intro h2 {
+        font-size: 1.15rem;
+        margin: 18px 0 8px;
+        color: #0f172a;
       }
-      .seo-intro a {
-        color: #1d4ed8;
+      .seo-intro p { margin: 0 0 10px; font-size: 1rem; }
+      .seo-intro ul { margin: 6px 0 14px; padding-inline-start: 22px; }
+      .seo-intro li { margin: 4px 0; }
+      .seo-intro a { color: #1d4ed8; }
+      .seo-intro details {
+        margin: 6px 0;
+        padding: 10px 14px;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: #ffffff;
       }
+      .seo-intro details > summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: #0f172a;
+      }
+      .seo-intro details[open] { background: #f9fbff; }
+      .seo-intro details p { margin: 8px 0 0; color: #334155; }
     </style>
+
     <noscript>
       <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Rubik:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     </noscript>
+
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
         "@type": "WebApplication",
         "name": "LinkCheck by Erlix",
+        "alternateName": "LinkCheck",
         "url": "https://erlix.net/linkcheck/",
         "applicationCategory": "SecurityApplication",
         "operatingSystem": "Web",
         "inLanguage": ["he", "en"],
-        "description": "כלי מקוון לבדיקת הודעות וקישורים חשודים עם ניתוח סיכונים בזמן אמת."
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "publisher": {
+          "@type": "Organization",
+          "name": "Erlix",
+          "url": "https://erlix.net/"
+        },
+        "description": "כלי חינמי בעברית ובאנגלית לבדיקת קישורים חשודים והודעות SMS פישינג. ניתוח בזמן אמת, פתיחת קישורים מקוצרים, ובדיקות מול מאגרי איומים עולמיים."
+      }
+    </script>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "האם LinkCheck יודע לזהות פישינג בכל השפות?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "LinkCheck יודע לנתח קישורים חשודים בכל שפה, ובנוסף כולל אותות סמנטיים ואותות פישינג ייעודיים לתוכן הודעות בעברית ובאנגלית."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "האם LinkCheck בודק גם קישורים מקוצרים כמו bit.ly?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "כן. הסורק מרחיב קישורים מקוצרים ובודק את דומיין היעד הסופי לפני החזרת תוצאה סופית."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "מה קורה כשיש בהודעה יותר מקישור אחד?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "LinkCheck מחלץ את כל הקישורים שבהודעה, מבצע ניתוח לכמה קישורים, ומציג בתוצאה הראשית את הקישור בעל הסיכון הגבוה ביותר תוך התחשבות בהקשר ההודעה."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "האם הבדיקות נשמרות באופן אוטומטי בשרת?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "המערכת שומרת לוגים תפעוליים מצומצמים לצורכי ניטור ושיפור שירות, תוך הקפדה על אחסון פרטני וזהיר וללא שמירת תוכן ההודעה בלוגי השימוש."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "קיבלתי SMS חשוד מהבנק או מדואר ישראל — איך לדעת אם הקישור אמיתי?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "הדביקו את הודעת ה-SMS המלאה ב-LinkCheck, כולל הקישור. הכלי יבדוק את כתובת היעד, יזהה דומיין מתחזה, יבדוק תעודת HTTPS, ויחזיר חיווי ברור על רמת הסיכון."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "לחצתי בטעות על קישור חשוד, מה כדאי לעשות עכשיו?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "אם לא הזנתם פרטים — לרוב אין סיכון מיידי. סגרו את הדף, הריצו סריקת אנטי-וירוס, ובידקו את הקישור ב-LinkCheck כדי להבין אם הוא הוביל לאתר פישינג מוכר. אם הזנתם סיסמה או פרטי אשראי — יש להחליף סיסמה ולבטל את האשראי באופן מיידי."
+            }
+          }
+        ]
       }
     </script>
   </head>
   <body>
     <header class="seo-intro" role="banner">
-      <h1>LinkCheck — בדיקת קישורים והודעות חשודות</h1>
+      <h1>האם הקישור הזה בטוח? בדיקת קישור חשוד והודעות SMS — LinkCheck</h1>
+
       <p>
-        LinkCheck של Erlix הוא כלי חינמי לבדיקת קישורים והודעות SMS חשודים.
-        הכלי מנתח את הקישור ואת תוכן ההודעה בזמן אמת, ומספק חיווי על רמת הסיכון,
-        סימני פישינג, ובדיקות בטיחות חיצוניות מול מאגרי איומים מובילים.
+        <strong>LinkCheck של Erlix</strong> הוא כלי חינמי בעברית ובאנגלית לבדיקת
+        <strong>קישורים חשודים</strong> ו<strong>הודעות SMS פישינג</strong>. הדביקו את ההודעה המלאה
+        או את הקישור — הכלי ינתח את הקישור, יפתח קישורים מקוצרים (כמו <em>bit.ly</em>, <em>tinyurl</em>,
+        <em>t.me</em>) עד ליעד האמיתי, ויחזיר תוצאה ברורה תוך שניות: ירוק (בטוח), צהוב (יש לשים לב)
+        או אדום (סיכון גבוה).
       </p>
-      <p>
-        הדביקו קישור או הודעה לבדיקה מהירה — תוצאה ברורה תוך שניות.
-        עמוד הכלי: <a href="https://erlix.net/linkcheck/">https://erlix.net/linkcheck/</a>
+
+      <h2>מה הכלי בודק עבורך</h2>
+      <ul>
+        <li>סימני <strong>פישינג</strong> בטקסט ההודעה — לחץ, דחיפות, התחזות לבנק / דואר ישראל / רשות המיסים.</li>
+        <li>שרשרת ההפניות של ה<strong>קישור</strong> — פתיחת קישורים מקוצרים עד ליעד הסופי.</li>
+        <li>תקינות תעודת ה-<strong>HTTPS</strong> ותקינות הדומיין.</li>
+        <li>בדיקה מול מאגרי איומים עולמיים: <em>Google Safe Browsing</em>, <em>VirusTotal</em>, <em>URLScan.io</em>.</li>
+        <li>זיהוי דומיינים <strong>מתחזים</strong> (אותיות קיריליות, אותיות גדולות חשודות, דומיינים דומים לשמות מוכרים).</li>
+      </ul>
+
+      <h2>מתי כדאי להשתמש בכלי</h2>
+      <ul>
+        <li>קיבלתם <strong>SMS חשוד</strong> מהבנק, מ"דואר ישראל", מנמל"ת, או מ"רשות המיסים".</li>
+        <li>הגיעה לכם <strong>הודעת WhatsApp</strong> עם קישור מאדם שאינכם מכירים.</li>
+        <li>נתקלתם בקישור <strong>מקוצר</strong> (<em>bit.ly</em>, <em>tinyurl</em>, <em>cutt.ly</em>) ואינכם בטוחים אם בטוח ללחוץ.</li>
+        <li>חשדתם בהודעה שמבקשת מכם להזין <strong>סיסמה, פרטי אשראי או OTP</strong>.</li>
+      </ul>
+
+      <h2>שאלות נפוצות</h2>
+
+      <details>
+        <summary>האם LinkCheck יודע לזהות פישינג בכל השפות?</summary>
+        <p>
+          LinkCheck יודע לנתח קישורים חשודים בכל שפה, ובנוסף כולל אותות סמנטיים ואותות פישינג ייעודיים
+          לתוכן הודעות בעברית ובאנגלית.
+        </p>
+      </details>
+
+      <details>
+        <summary>האם LinkCheck בודק גם קישורים מקוצרים כמו bit.ly?</summary>
+        <p>
+          כן. הסורק מרחיב קישורים מקוצרים ובודק את דומיין היעד הסופי לפני החזרת תוצאה סופית.
+        </p>
+      </details>
+
+      <details>
+        <summary>מה קורה כשיש בהודעה יותר מקישור אחד?</summary>
+        <p>
+          LinkCheck מחלץ את כל הקישורים שבהודעה, מבצע ניתוח לכמה קישורים, ומציג בתוצאה הראשית את
+          הקישור בעל הסיכון הגבוה ביותר תוך התחשבות בהקשר ההודעה.
+        </p>
+      </details>
+
+      <details>
+        <summary>האם הבדיקות נשמרות באופן אוטומטי בשרת?</summary>
+        <p>
+          המערכת שומרת לוגים תפעוליים מצומצמים לצורכי ניטור ושיפור שירות, תוך הקפדה על אחסון פרטני
+          וזהיר וללא שמירת תוכן ההודעה בלוגי השימוש.
+        </p>
+      </details>
+
+      <details>
+        <summary>קיבלתי SMS חשוד מהבנק או מדואר ישראל — איך לדעת אם הקישור אמיתי?</summary>
+        <p>
+          הדביקו את הודעת ה-SMS המלאה ב-LinkCheck, כולל הקישור. הכלי יבדוק את כתובת היעד, יזהה דומיין
+          מתחזה, יבדוק תעודת <strong>HTTPS</strong>, ויחזיר חיווי ברור על רמת הסיכון.
+        </p>
+      </details>
+
+      <details>
+        <summary>לחצתי בטעות על קישור חשוד, מה כדאי לעשות עכשיו?</summary>
+        <p>
+          אם לא הזנתם פרטים — לרוב אין סיכון מיידי. סגרו את הדף, הריצו סריקת אנטי-וירוס, ובדקו את
+          הקישור ב-LinkCheck כדי להבין אם הוא הוביל לאתר <strong>פישינג</strong> מוכר. אם הזנתם
+          סיסמה או פרטי אשראי — החליפו סיסמה ובטלו את האשראי באופן מיידי.
+        </p>
+      </details>
+
+      <p style="margin-top:14px;font-size:0.95rem;color:#475569;">
+        עמוד הכלי: <a href="https://erlix.net/linkcheck/">https://erlix.net/linkcheck/</a> ·
+        אתר Erlix: <a href="https://erlix.net/">https://erlix.net/</a>
       </p>
     </header>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

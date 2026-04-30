@@ -682,30 +682,9 @@ export function App() {
     };
   }, [result, loading, liveMeta, lastScanPayload, pendingIntelInProgress, t]);
 
-  useEffect(() => {
-    const scriptId = "linkcheck-faq-jsonld";
-    const existing = document.getElementById(scriptId);
-    if (existing) existing.remove();
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.type = "application/ld+json";
-    script.text = JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      mainEntity: seo.faqs.map((item) => ({
-        "@type": "Question",
-        name: item.q,
-        acceptedAnswer: {
-          "@type": "Answer",
-          text: item.a,
-        },
-      })),
-    });
-    document.head.appendChild(script);
-    return () => {
-      script.remove();
-    };
-  }, [seo]);
+  // FAQPage JSON-LD is now defined statically in index.html so search engines
+  // see a single canonical FAQPage in raw HTML. We intentionally do NOT inject
+  // a runtime FAQPage script here — Google requires only one FAQPage per page.
 
   const riskVariant = (level: RiskLevel) =>
     level === "Low" ? "safe" : level === "Medium" ? "warn" : "danger";
