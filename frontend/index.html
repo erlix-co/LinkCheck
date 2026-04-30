@@ -53,48 +53,57 @@
     />
 
     <style>
-      .seo-intro {
-        max-width: 980px;
-        margin: 28px auto 8px;
-        padding: 22px 26px 18px;
-        border: 1px solid #d8dee9;
-        border-radius: 16px;
-        background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
-        color: #1f2937;
-        font-family: Rubik, Arial, sans-serif;
+      .seo-article {
+        position: relative;
+        z-index: 1;
+        max-width: 760px;
+        margin: 0 auto 48px;
+        padding: 22px 24px 24px;
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(17, 46, 92, 0.45), rgba(10, 26, 52, 0.5));
+        color: #e4e8f1;
+        font-family: Rubik, 'Segoe UI', Arial, sans-serif;
         line-height: 1.75;
         direction: rtl;
         text-align: right;
       }
-      .seo-intro h1 {
-        font-size: 1.7rem;
-        margin: 0 0 12px;
-        color: #0f172a;
-        line-height: 1.35;
+      .seo-article h1 {
+        font-size: 1.25rem;
+        margin: 0 0 10px;
+        font-family: 'Space Grotesk', Rubik, sans-serif;
+        color: #dff0ff;
+        line-height: 1.4;
       }
-      .seo-intro h2 {
-        font-size: 1.15rem;
-        margin: 18px 0 8px;
-        color: #0f172a;
+      .seo-article h2 {
+        font-size: 1.02rem;
+        margin: 14px 0 6px;
+        font-family: 'Space Grotesk', Rubik, sans-serif;
+        color: #cbe8ff;
       }
-      .seo-intro p { margin: 0 0 10px; font-size: 1rem; }
-      .seo-intro ul { margin: 6px 0 14px; padding-inline-start: 22px; }
-      .seo-intro li { margin: 4px 0; }
-      .seo-intro a { color: #1d4ed8; }
-      .seo-intro details {
-        margin: 6px 0;
-        padding: 10px 14px;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        background: #ffffff;
+      .seo-article p { margin: 0 0 6px; font-size: 0.92rem; color: #c2cce0; }
+      .seo-article ul { margin: 8px 0 12px; padding-inline-start: 22px; color: #e4f3ff; font-size: 0.9rem; }
+      .seo-article li { margin: 4px 0; }
+      .seo-article strong { color: #f0f8ff; }
+      .seo-article em { color: #a8c8eb; font-style: normal; }
+      .seo-article a { color: #7cc4ff; }
+      .seo-article details {
+        margin: 8px 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 12px;
+        background: rgba(15, 32, 63, 0.55);
       }
-      .seo-intro details > summary {
+      .seo-article details > summary {
         cursor: pointer;
-        font-weight: 600;
-        color: #0f172a;
+        font-weight: 500;
+        color: #d4ecff;
+        font-size: 0.92rem;
+        line-height: 1.5;
       }
-      .seo-intro details[open] { background: #f9fbff; }
-      .seo-intro details p { margin: 8px 0 0; color: #334155; }
+      .seo-article details[open] { background: rgba(15, 32, 63, 0.75); }
+      .seo-article details p { margin-top: 8px; font-size: 0.88rem; color: #b9c4d8; }
+      .seo-article__meta { margin-top: 14px; font-size: 0.85rem; color: #8896b3; }
     </style>
 
     <noscript>
@@ -180,7 +189,9 @@
     </script>
   </head>
   <body>
-    <header class="seo-intro" role="banner">
+    <div id="root"></div>
+
+    <article class="seo-article" aria-label="LinkCheck — בדיקת קישורים חשודים">
       <h1>האם הקישור הזה בטוח? בדיקת קישור חשוד והודעות SMS — LinkCheck</h1>
 
       <p>
@@ -202,7 +213,7 @@
 
       <h2>מתי כדאי להשתמש בכלי</h2>
       <ul>
-        <li>קיבלתם <strong>SMS חשוד</strong> מהבנק, מ"דואר ישראל", מנמל"ת, או מ"רשות המיסים".</li>
+        <li>קיבלתם <strong>SMS חשוד</strong> מהבנק, מ"דואר ישראל", או מ"רשות המיסים".</li>
         <li>הגיעה לכם <strong>הודעת WhatsApp</strong> עם קישור מאדם שאינכם מכירים.</li>
         <li>נתקלתם בקישור <strong>מקוצר</strong> (<em>bit.ly</em>, <em>tinyurl</em>, <em>cutt.ly</em>) ואינכם בטוחים אם בטוח ללחוץ.</li>
         <li>חשדתם בהודעה שמבקשת מכם להזין <strong>סיסמה, פרטי אשראי או OTP</strong>.</li>
@@ -258,13 +269,12 @@
         </p>
       </details>
 
-      <p style="margin-top:14px;font-size:0.95rem;color:#475569;">
+      <p class="seo-article__meta">
         עמוד הכלי: <a href="https://erlix.net/linkcheck/">https://erlix.net/linkcheck/</a> ·
         אתר Erlix: <a href="https://erlix.net/">https://erlix.net/</a>
       </p>
-    </header>
+    </article>
 
-    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
