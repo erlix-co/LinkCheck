@@ -21,7 +21,7 @@ if (!hasFrontendReact) {
   }
 }
 
-const buildResult = spawnSync("npm", ["run", "build"], {
+const buildResult = spawnSync("npx", ["vite", "build"], {
   cwd: "../frontend",
   env,
   stdio: "inherit",
