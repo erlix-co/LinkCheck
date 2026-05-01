@@ -8,6 +8,8 @@ This folder contains a dedicated Android app project for Google Play, separated 
 - Mobile container: `Capacitor` + native Android project in `mobile/android`
 - API backend: same production backend used by web (`/api` endpoints from deployed site)
 - Mobile build injects `VITE_API_BASE_URL=https://erlix.net/api` so app networking works from `file://` context.
+- For mobile packaging speed/stability, the script builds web assets with `vite build`
+  (without running `tsc -b` typecheck). Web CI can still keep strict typecheck separately.
 
 ## Prerequisites
 
