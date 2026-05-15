@@ -3692,30 +3692,6 @@ def send_issue_report_email(
         smtp.send_message(msg)
 
 
-# --- BCC Alert Outlook: minimal license status (keep in sync with BCC-Alert/backend/app.py) ---
-_BCC_LICENSE_ACTIVE_EMAIL = (os.getenv("LICENSE_ACTIVE_EMAIL") or "ierlich@gmail.com").strip().lower()
-_BCC_LICENSE_ACTIVE_EXPIRES_AT = os.getenv("LICENSE_ACTIVE_EXPIRES_AT") or "2026-12-31T00:00:00Z"
-
-
-@app.get("/license-status")
-@limiter.limit("120 per minute")
-def bcc_license_status():
-    """GET /license-status?email= — public as https://erlix.net/api/license-status"""
-    try:
-        email = (request.args.get("email") or "").strip().lower()
-        if not email:
-            logger.info("[LICENSE_API] missing or empty email -> expired")
-            return jsonify({"status": "expired"})
-        if email == _BCC_LICENSE_ACTIVE_EMAIL:
-            logger.info("[LICENSE_API] active for %s", email)
-            return jsonify({"status": "active", "expiresAt": _BCC_LICENSE_ACTIVE_EXPIRES_AT})
-        logger.info("[LICENSE_API] expired for %s", email)
-        return jsonify({"status": "expired"})
-    except Exception:
-        logger.exception("[LICENSE_API] unhandled error (returning expired)")
-        return jsonify({"status": "expired"})
-
-
 @app.get("/report/config")
 @limiter.limit("120 per minute")
 def report_config():
